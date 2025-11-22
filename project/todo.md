@@ -26,6 +26,7 @@ AQUI VAI O **PLANO DIÁRIO**, COMPLETO, PRONTO-PRA-EXECUTAR, pensado para transf
 
 Ele é realista mas muito forte. Se você seguir isso por 12 meses, você vira *inegável*.
 
+
 ---
 
 # 🧠 **VISÃO GERAL DO SISTEMA**
