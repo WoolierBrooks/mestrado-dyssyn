@@ -1,3 +1,28 @@
 *.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual envs
+env/
 venv/
-input/*.xlsx
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs
+.vscode/
+.idea/
+
+# Datasets (large)
+*.tsv
+*.npy
+*.npz
+*.pt
+*.pickle
+
+# OS files
+.DS_Store
+Thumbs.db
