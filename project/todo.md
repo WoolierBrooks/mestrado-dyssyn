@@ -1,6 +1,10 @@
 # TODO
 
 ## High Priority
+[ ] Ler o trabalho do Maletzke e identificar:
+- Qual o range do merge?
+- Quantas curvas ele gera por combinação?
+- Quantos pontos ele utiliza por curva?
 [ ] Fazer setup do exp_001 (mudar arquivos e criar yaml)
 [ ] Implementar um melhor logging  
 [ ] Adicionar múltiplos holdout  

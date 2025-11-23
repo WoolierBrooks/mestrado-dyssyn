@@ -1,0 +1,2 @@
+Para esse primeiro experimento, depois de fazer uma leve exploração, realizou-se um teste gerando 1000 curvas no moss variando apenas o valor de alpha, deixando merge = 3 fixo (default)  
+Os resultados foram pouco satisfatórios
