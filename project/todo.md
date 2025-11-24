@@ -1,6 +1,7 @@
 # TODO
 
 ## High Priority
+- ele treina só uma vez depois vai testando com todos os datasets certo?
 - enquanto esse experimento roda eu podria ler o trabalho da isabela, pesquisar sobre como o dyssyn usa o moss, preparar testes da via
 - eliminar dados do meu pc nos experimentos 003 para baixo
 testar um modelo com um número bem grande de curvas (100 000 )
