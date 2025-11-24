@@ -1,6 +1,227 @@
 # TODO
 
 ## High Priority
+- 
+Todo dia você precisa trabalhar em 4 frentes:
+
+Produção científica
+Profundidade técnica
+Construção de reputação
+Aplicação perfeita (portfólio, CV, SoP)
+Saúde e disciplina (para ser sustentável 1 ano)
+
+Você vai ter rotina diária + semanal + mensal.
+
+📅 ROTINA DIÁRIA (versão definitiva)
+
+										🔥 2h — Pesquisa / Experimentos (core do MIT)
+
+Todos os dias, sem exceção (“deep work”).
+
+Nessas 2h você faz:
+
+											Rodar experimentos
+											Analisar dados
+											Escrever anotações técnicas
+											Ler papers relacionados ao que você está fazendo
+
+Essas duas horas são sagradas.
+
+Meta mensal:
+
+1 experimento significativo por semana
+1 resultado concreto por mês (gráfico, métrica, insight, negative result)
+
+										📚 1h — Leitura de Papers (AI, ML, sua área específica)
+
+Padrão MIT:
+
+											1 paper por dia mínimo, com:
+
+  											Resumo
+											O que aprendi
+											Onde posso aplicar
+											Critiques (por que o artigo não funciona sempre)
+
+											Você vai criar um database de papers (Notion / Obsidian).
+
+🧑‍💻 1h — Skill Building (código, matemática, estatística)
+
+Alternar:
+
+Segunda / Quarta / Sexta → Código
+
+Python avançado
+PyTorch / JAX
+Data pipelines
+Modelagem eficiente
+Projetos replicando papers
+
+Terça / Quinta / Sábado → Matemática
+
+Probabilidade
+Estatística
+Linear Algebra
+Otimização
+ML fundamentals
+
+MIT AMA candidatos que sabem matemática mesmo.
+
+✍️ 30 min — Escrita científica
+
+Todos os dias escreva:
+
+Notas
+Descrição de experimentos
+Parágrafos soltos para eventual paper
+Resumos de insights
+
+Essa prática diária = no final do ano sua escrita científica fica nível PhD.
+
+🤝 20 min — Networking / E-mails / Comunidade
+
+Você precisa ser visível.
+
+Todos os dias:
+
+Comentar algo útil no Discord de pesquisa, Slack, GitHub
+Mandar e-mail alinhado com um professor e seus tópicos
+Interagir com grupos de pesquisa
+
+MIT escolhe pessoas que sabem se comunicar.
+
+🧭 15 min — Plano e checklist do dia seguinte
+
+Ajuste:
+
+O que funcionou hoje?
+O que vou fazer amanhã?
+O que falta para fechar meu projeto do mês?
+
+Simplicidade = consistência.
+
+💪 Treino + Saúde (essencial para aguentar 1 ano)
+
+MIT é puxado. Se você não estiver forte, queimará.
+
+30–60 min de treino** (calistenia / crossfit / corrida)
+Dormir 7–8h
+Comer bem
+Meditar 5–10 min
+
+Disciplina física → disciplina acadêmica.
+
+📅 ROTINA SEMANAL
+
+Segunda
+
+Definir metas técnicas da semana
+Rodar experimento principal
+
+Terça
+
+Deep learning / estatística
+Codificar experimentos
+
+Quarta
+
+Networking com professor / grupo
+Refatorar código
+Ler papers profundos
+
+Quinta
+
+Resultados parciais
+Discussão com orientador
+Ajustes no pipeline
+
+Sexta
+
+Produzir gráfico
+Conclusão semanal
+Escrever 1 página de "Weekly Research Report"
+
+Sábado
+
+Estudo matemático
+Reproduzir 1 experimento de paper
+Projetos paralelos
+
+Domingo
+
+Descanso PASSIVO (mas ler 1 paper leve)
+Revisão da semana
+Planejamento da próxima
+
+📅 ROTINA MENSAL
+
+Meta de cada mês:
+
+✔ 1 microprojeto completo (ou avanço forte no principal)
+✔ 1 resultado reprodutível
+✔ 1 artefato público (GitHub/blog/notebook)
+✔ 1 professor internacional contatado
+
+A cada 30 dias você vai:
+
+Atualizar CV
+Escrever 1 nova seção da Statement of Purpose
+Atualizar portfólio no GitHub
+Criar 1 conteúdo de impacto:
+
+  Reproduzir um paper conhecido
+  Criar um notebook
+  Fazer um release de código
+
+MIT adora ver:
+
+Clareza técnica
+Entregáveis
+Capacidade de comunicar ciência
+
+🎯 RESULTADO EM 12 MESES
+
+Se você seguir isso, você terá:
+
+1) Um projeto de mestrado forte
+
+→ núcleo da sua aplicação
+
+2) Pelo menos 1 submissão (mesmo que não aceite)
+
+→ conta MUITO
+
+3) Portfólio em GitHub com código limpo e replicável
+
+→ PI vê e pensa “esse cara produz”.
+
+4) Cartas de recomendação absurdamente fortes
+
+→ sua consistência diária mostra seriedade
+
+5) Statement of Purpose impecável
+
+→ montada aos poucos
+
+6) Reputação real na área
+
+→ sua presença diária deixa rastro de competência
+
+Você chega no próximo ciclo como:
+
+O candidato que o MIT quer.
+
+🔥 Quer que eu transforme isso em um PLANO HORÁRIO (07:00 → 22:00) para você seguir como rotina diária?**
+
+Tipo:
+
+07:00 acordar
+07:15 leitura
+08:00 deep work
+etc…
+
+Se quiser, eu monto a versão ultra-detalhada.
+asdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdf
 - ele treina só uma vez depois vai testando com todos os datasets certo?
 - enquanto esse experimento roda eu podria ler o trabalho da isabela, pesquisar sobre como o dyssyn usa o moss, preparar testes da via
 - eliminar dados do meu pc nos experimentos 003 para baixo
