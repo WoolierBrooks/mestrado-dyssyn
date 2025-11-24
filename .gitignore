@@ -22,6 +22,7 @@ venv/
 *.npz
 *.pt
 *.pickle
+*.pkl
 
 # OS files
 .DS_Store

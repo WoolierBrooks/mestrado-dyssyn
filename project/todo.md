@@ -1,7 +1,11 @@
 # TODO
 
 ## High Priority
-testar um modelo com um número bem grande de curvas (100 000 - 500 000 curvas) para ver se têm um melhor resultado Aqui se eu considerar ns = 1 000 000, np = 99 nm = 100 nc = 100 daria 990 000 curvas com 1M de pontos cada
+- enquanto esse experimento roda eu podria ler o trabalho da isabela, pesquisar sobre como o dyssyn usa o moss, preparar testes da via
+- eliminar dados do meu pc nos experimentos 003 para baixo
+testar um modelo com um número bem grande de curvas (100 000 )
+o dyssyn ele gera curvas também não? que configurações de moss ele usa?
+- 500 000 curvas) para ver se têm um melhor resultado Aqui se eu considerar ns = 1 000 000, np = 99 nm = 100 nc = 100 daria 990 000 curvas com 1M de pontos cada
 
 [ ] Expandir a avaliação para todos os datasets disponíveis (~100+). 
 Na hora de ver o erro por prevalência é bom testar vários para ter um bom resultado, segundo a estatística uns 30 mas acho que consigo testar uns 50 Analisar mais detalhadamente por prevalência (gráficos por dataset, médias por prevalência). Fazer logs dos tempos e uso de memória nas execuções massivas antes de escalar
