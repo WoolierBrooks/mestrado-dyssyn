@@ -7,7 +7,9 @@ __pycache__/
 # Virtual envs
 env/
 venv/
+datasets/multiclass/*.csv
 *.egg-info/
+datasets/multiclass/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -23,7 +25,10 @@ venv/
 *.pt
 *.pickle
 *.pkl
+*.csv
 
 # OS files
 .DS_Store
 Thumbs.db
+
+datasets/multiclass/
