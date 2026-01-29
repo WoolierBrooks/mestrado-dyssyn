@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 SEED = 42
 BATCH_SIZE = 100
 N_PREV = 19
-REPEATS = 1
+REPEATS = 30
 
 # Nota: O DyS treina diretamente nos datasets reais, 
 # então o MOSS pode ser usado como validação ou ignorado.

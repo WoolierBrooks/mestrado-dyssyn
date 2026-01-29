@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore")
 SEED = 42
 BATCH_SIZE = 100
 N_PREV = 19
-REPEATS = 1
+REPEATS = 30
 
 MOSS_PKL = "moss_ns100_np15_nm15_nc20.pkl"
 MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/hold"
@@ -258,8 +258,8 @@ def run_experiment():
 
                     pbar.update(1)
 
-    pd.DataFrame(rows).to_csv("comparacao_moss_feature_sets.csv", index=False)
-    print("\n✅ Finalizado → comparacao_moss_feature_sets.csv")
+    pd.DataFrame(rows).to_csv("comparacao_moss_feature_sets_30.csv", index=False)
+    print("\n✅ Finalizado → comparacao_moss_feature_sets_30.csv")
 
 # ============================================================
 # MAIN

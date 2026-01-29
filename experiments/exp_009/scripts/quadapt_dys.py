@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore")
 SEED = 42
 BATCH_SIZE = 100
 N_PREV = 19
-REPEATS = 1
+REPEATS = 30
 
 DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/binary"
 OUTPUT_CSV = "comparacao_quadapt_results.csv"

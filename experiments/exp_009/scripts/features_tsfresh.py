@@ -23,10 +23,10 @@ warnings.filterwarnings("ignore")
 SEED = 42
 BATCH_SIZE = 100
 N_PREV = 19
-REPEATS = 1
+REPEATS = 30
 
-MOSS_PKL = "moss_ns100_np15_nm15_nc20.pkl"
-MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/hold"
+MOSS_PKL = "moss_binario_lite.pkl"
+MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/lite"
 DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/binary"
 
 np.random.seed(SEED)
