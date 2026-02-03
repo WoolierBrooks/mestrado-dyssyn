@@ -14,6 +14,20 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def to_scalar_prev_pred(prev_pred):
+    arr = np.asarray(prev_pred)
+    if arr.ndim == 0:
+        return float(arr)
+    if arr.size == 1:
+        return float(arr.item())
+    if arr.size == 2:
+        return float(arr.ravel()[1])
+    return float(arr.ravel()[0])
+
+# ============================================================
 # CONFIG
 # ============================================================
 SEED = 42
@@ -135,6 +149,7 @@ def run_experiment():
                     t0 = time.perf_counter()
                     feat_vector = extractor(scores).reshape(1, -1)
                     prev_pred = reg.predict(feat_vector)[0]
+                    prev_pred = to_scalar_prev_pred(prev_pred)
                     t = (time.perf_counter() - t0) / len(idx)
 
                     rows.append({
