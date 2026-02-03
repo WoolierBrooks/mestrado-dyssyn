@@ -14,6 +14,20 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+def to_scalar_prev_pred(prev_pred):
+    arr = np.asarray(prev_pred)
+    if arr.ndim == 0:
+        return float(arr)
+    if arr.size == 1:
+        return float(arr.item())
+    if arr.size == 2:
+        return float(arr.ravel()[1])
+    return float(arr.ravel()[0])
+
+# ============================================================
 # CONFIG
 # ============================================================
 
@@ -189,6 +203,7 @@ def run_experiment():
                 prev_pred = reg.predict(
                     minirocket_features(scores).reshape(1, -1)
                 )[0]
+                prev_pred = to_scalar_prev_pred(prev_pred)
                 t = (time.perf_counter() - t0) / len(idx)
 
                 rows.append({
