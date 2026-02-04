@@ -1,10 +1,10 @@
-import os
 import time
 import numpy as np
 import pandas as pd
 import warnings
 
-from sklearn.model_selection import train_test_split
+import quapy as qp
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
@@ -23,8 +23,43 @@ BATCH_SIZE = 100
 N_PREV = 19
 REPEATS = 30
 
-DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/binary"
 OUTPUT_CSV = "comparacao_quadapt_results.csv"
+
+QUAPY_BINARY_DATASETS = [
+    "acute.a",
+    "acute.b",
+    "balance.1",
+    "balance.2",
+    "balance.3",
+    "breast-cancer",
+    "cmc.1",
+    "cmc.2",
+    "cmc.3",
+    "ctg.1",
+    "ctg.2",
+    "ctg.3",
+    "german",
+    "haberman",
+    "ionosphere",
+    "iris.1",
+    "iris.2",
+    "iris.3",
+    "mammographic",
+    "pageblocks.5",
+    "semeion",
+    "sonar",
+    "spambase",
+    "spectf",
+    "tictactoe",
+    "transfusion",
+    "wdbc",
+    "wine.1",
+    "wine.2",
+    "wine.3",
+    "wine-q-red",
+    "wine-q-white",
+    "yeast",
+]
 
 np.random.seed(SEED)
 
@@ -58,20 +93,16 @@ class APP:
 # ============================================================
 # LOADER
 # ============================================================
-def load_dataset(path):
-    df = pd.read_csv(path)
-    y = df.iloc[:, -1].values
-    X = df.iloc[:, :-1].values
-    if len(np.unique(y)) > 2:
-        y = (y == np.max(y)).astype(int)
-    return X, y
+def load_quapy_dataset(name):
+    data = qp.datasets.fetch_UCIBinaryDataset(name, verbose=False)
+    return data.training.X, data.training.y, data.test.X, data.test.y
 
 # ============================================================
 # EXPERIMENT
 # ============================================================
 def run_experiment():
     app = APP()
-    datasets = sorted(f for f in os.listdir(DATASETS_ROOT) if f.endswith(".csv"))
+    datasets = QUAPY_BINARY_DATASETS
 
     # Configuração dos modelos: DyS puro vs QuaDapt(DyS)
     # O QuaDapt precisa de um quantificador base.
@@ -92,12 +123,10 @@ def run_experiment():
 
     with tqdm(total=total_steps, desc="⏳ Executando Experimento", unit="exp") as pbar:
         for ds in datasets:
-            X, y = load_dataset(os.path.join(DATASETS_ROOT, ds))
-            X = StandardScaler().fit_transform(X)
-
-            Xtr, Xte, ytr, yte = train_test_split(
-                X, y, test_size=0.5, stratify=y, random_state=SEED
-            )
+            Xtr, ytr, Xte, yte = load_quapy_dataset(ds)
+            scaler = StandardScaler().fit(Xtr)
+            Xtr = scaler.transform(Xtr)
+            Xte = scaler.transform(Xte)
 
             # Treinar e testar cada configuração
             for name, q_model in model_configs.items():
