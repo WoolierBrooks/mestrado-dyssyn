@@ -36,8 +36,8 @@ BATCH_SIZE = 100
 N_PREV = 19
 REPEATS = 30
 
-MOSS_PKL = "moss_0_100.pkl"
-MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss"
+MOSS_PKL = "moss_binario_lite.pkl"
+MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/lite"
 DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/binary"
 OUTPUT_CSV = "comparacao_moss_feature_sets_1.csv"
 
