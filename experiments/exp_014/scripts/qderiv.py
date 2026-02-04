@@ -42,10 +42,7 @@ MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/lite"
 OUTPUT_CSV = "comparacao_moss_feature_sets_1.csv"
 
 QUAPY_BINARY_DATASETS = [
-    "acute.a",
-    "acute.b",
     "balance.1",
-    "balance.2",
     "balance.3",
     "breast-cancer",
     "cmc.1",

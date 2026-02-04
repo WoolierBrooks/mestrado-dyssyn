@@ -42,10 +42,7 @@ MOSS_PKL = "moss_binario_lite.pkl"
 MOSS_FOLDER = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/lite"
 
 QUAPY_BINARY_DATASETS = [
-    "acute.a",
-    "acute.b",
     "balance.1",
-    "balance.2",
     "balance.3",
     "breast-cancer",
     "cmc.1",

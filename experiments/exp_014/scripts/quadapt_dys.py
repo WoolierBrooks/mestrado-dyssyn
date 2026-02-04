@@ -26,10 +26,7 @@ REPEATS = 30
 OUTPUT_CSV = "comparacao_quadapt_results.csv"
 
 QUAPY_BINARY_DATASETS = [
-    "acute.a",
-    "acute.b",
     "balance.1",
-    "balance.2",
     "balance.3",
     "breast-cancer",
     "cmc.1",
