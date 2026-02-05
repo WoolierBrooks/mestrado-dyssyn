@@ -22,9 +22,9 @@ SEED = 42
 BATCH_SIZE = 100
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-MOSS_DIR = os.path.join(REPO_ROOT, "datasets", "multiclass")
-DATASETS_ROOT = os.path.join(REPO_ROOT, "datasets", "moss", "multiclass")
-OUTPUT_CSV = "d30_kde.csv"
+MOSS_DIR = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/multiclass"
+DATASETS_ROOT = os.path.join(REPO_ROOT, "datasets", "multiclass")
+OUTPUT_CSV = "m_30_baseline_vs_kdehist_global.csv"
 
 HIST_BINS = (10, 20, 30, 50)
 KDE_GRID_SIZE = 50
@@ -104,6 +104,8 @@ FEATURE_EXTRACTORS = {
 # ============================================================
 def run_experiment():
     datasets = sorted(f for f in os.listdir(DATASETS_ROOT) if f.endswith(".csv"))
+    if not datasets:
+        raise FileNotFoundError(f"Nenhum dataset .csv encontrado em {DATASETS_ROOT}")
 
     models_by_nclasses = {}
     rows = []
@@ -219,6 +221,12 @@ def run_experiment():
                 )
 
         pd.DataFrame(rows).to_csv(OUTPUT_CSV, index=False)
+
+    if not rows:
+        raise RuntimeError(
+            "Nenhuma linha foi gerada. Verifique se os arquivos MoSS em "
+            f"{MOSS_DIR} (moss_d_lite_*.pkl) existem para as classes dos datasets."
+        )
 
     print(f"\n✅ Experimento concluído! Resultados salvos em {OUTPUT_CSV}")
 
