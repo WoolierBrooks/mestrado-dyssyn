@@ -21,8 +21,9 @@ warnings.filterwarnings("ignore")
 SEED = 42
 BATCH_SIZE = 100
 
-MOSS_DIR = "/var/new_homes/julio/mestrado/mestrado-dyssyn/experiments/exp_013/moss_outputs_mn"
-DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/multiclass"
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+MOSS_DIR = os.path.join(REPO_ROOT, "experiments", "exp_013", "moss_outputs_mn")
+DATASETS_ROOT = os.path.join(REPO_ROOT, "datasets", "multiclass")
 OUTPUT_CSV = "m_30_baseline_vs_kdehist_global.csv"
 
 HIST_BINS = (10, 20, 30, 50)
