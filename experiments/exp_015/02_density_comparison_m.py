@@ -21,6 +21,7 @@ from scipy.stats import gaussian_kde
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from tqdm.auto import tqdm
 
 from mlquantify.model_selection import UPP
 
@@ -270,7 +271,7 @@ def run() -> None:
     if not datasets:
         raise RuntimeError(f"Nenhum CSV encontrado em {DATASETS_ROOT}")
 
-    for ds in datasets:
+    for ds in tqdm(datasets, desc="Processando datasets", unit="dataset"):
         X, y = load_dataset(os.path.join(DATASETS_ROOT, ds))
         n_classes = len(np.unique(y))
 
