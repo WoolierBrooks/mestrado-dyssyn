@@ -12,6 +12,7 @@ from scipy.stats import gaussian_kde
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from tqdm.auto import tqdm
 
 
 # ============================================================
@@ -87,7 +88,7 @@ def build_real_reference_kdes(
         files = files[:max_datasets]
 
     refs = []
-    for fname in files:
+    for fname in tqdm(files, desc="KDE real (datasets)", unit="dataset"):
         X, y = load_binary_csv(os.path.join(datasets_root, fname))
         if X is None:
             continue
@@ -114,7 +115,7 @@ def build_real_reference_kdes(
         clf.fit(Xtr, ytr)
 
         batches = []
-        for _ in range(repeats):
+        for _ in tqdm(range(repeats), desc=f"Batches {fname}", unit="batch", leave=False):
             idx = sample_batch(yte, target_pos_prev, batch_size, rng)
             batches.append(clf.predict_proba(Xte[idx])[:, 1])
 
