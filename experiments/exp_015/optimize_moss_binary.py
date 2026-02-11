@@ -303,6 +303,22 @@ class SaveBestMossCallback:
         print(f"   Salvo: {self.out_pkl}")
 
 
+
+def estimate_trials_from_baseline(
+    baseline_trials: int,
+    baseline_minutes: float,
+    deadline_hours: float,
+    safety_factor: float = 0.85,
+) -> int:
+    if baseline_trials <= 0 or baseline_minutes <= 0 or deadline_hours <= 0:
+        raise ValueError("Parâmetros inválidos para estimativa de trials")
+
+    trials_per_min = baseline_trials / baseline_minutes
+    total_minutes = deadline_hours * 60.0
+    estimated = int(trials_per_min * total_minutes * safety_factor)
+    return max(1, estimated)
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -313,6 +329,10 @@ def parse_args():
     p.add_argument("--output-pkl", default="moss_outputs/best_moss_binario.pkl")
 
     p.add_argument("--n-trials", type=int, default=120)
+    p.add_argument("--deadline-hours", type=float, default=16.0, help="tempo alvo em horas para execução")
+    p.add_argument("--baseline-trials", type=int, default=120, help="trials medidos no benchmark")
+    p.add_argument("--baseline-minutes", type=float, default=1.33, help="tempo (min) do benchmark")
+    p.add_argument("--safety-factor", type=float, default=0.85, help="fator de segurança para estimativa de trials")
     p.add_argument("--timeout", type=int, default=None, help="segundos")
     p.add_argument("--seed", type=int, default=42)
 
@@ -375,11 +395,32 @@ def main():
 
     callback = SaveBestMossCallback(args.output_pkl)
 
+    effective_n_trials = args.n_trials
+    effective_timeout = args.timeout
+
+    if args.deadline_hours is not None and args.deadline_hours > 0:
+        estimated_trials = estimate_trials_from_baseline(
+            baseline_trials=args.baseline_trials,
+            baseline_minutes=args.baseline_minutes,
+            deadline_hours=args.deadline_hours,
+            safety_factor=args.safety_factor,
+        )
+        effective_n_trials = max(effective_n_trials, estimated_trials)
+        if effective_timeout is None:
+            effective_timeout = int(args.deadline_hours * 3600)
+        print(
+            "⏱️ Planejamento de execução: "
+            f"deadline={args.deadline_hours}h, "
+            f"estimativa_trials={estimated_trials}, "
+            f"n_trials_final={effective_n_trials}, "
+            f"timeout_s={effective_timeout}"
+        )
+
     t0 = time.perf_counter()
     study.optimize(
         objective,
-        n_trials=args.n_trials,
-        timeout=args.timeout,
+        n_trials=effective_n_trials,
+        timeout=effective_timeout,
         callbacks=[callback],
         gc_after_trial=True,
         show_progress_bar=True,
