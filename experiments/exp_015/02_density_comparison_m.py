@@ -244,13 +244,18 @@ def save_group_png(group: List[Dict], title: str, out_path: str) -> None:
         )
         row_ax.text(0.01, 0.92, txt, fontsize=10, transform=row_ax.transAxes)
 
-        inset_h = 0.75 / max(1, row["n_classes"])
-        for c in range(row["n_classes"]):
-            ax_in = row_ax.inset_axes([0.03, 0.12 + (row["n_classes"] - 1 - c) * inset_h, 0.94, inset_h - 0.03])
+        n_classes = max(1, int(row["n_classes"]))
+        available_h = 0.75
+        gap = 0.01
+        inset_h = max(0.02, (available_h - gap * (n_classes - 1)) / n_classes)
+
+        for c in range(n_classes):
+            y0 = 0.12 + (n_classes - 1 - c) * (inset_h + gap)
+            ax_in = row_ax.inset_axes([0.03, y0, 0.94, inset_h])
             ax_in.plot(grid, row["real_kdes"][c], label=f"Real c={c}", linewidth=1.8)
             ax_in.plot(grid, row["moss_kdes"][c], label=f"MoSS c={c}", linewidth=1.8)
             ax_in.set_ylabel("dens")
-            if c == row["n_classes"] - 1:
+            if c == n_classes - 1:
                 ax_in.set_xlabel("score")
             ax_in.legend(loc="upper right", fontsize=8)
 
