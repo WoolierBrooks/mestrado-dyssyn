@@ -308,7 +308,7 @@ def estimate_trials_from_baseline(
     baseline_trials: int,
     baseline_minutes: float,
     deadline_hours: float,
-    safety_factor: float = 0.85,
+    safety_factor: float = 1,
 ) -> int:
     if baseline_trials <= 0 or baseline_minutes <= 0 or deadline_hours <= 0:
         raise ValueError("Parâmetros inválidos para estimativa de trials")
