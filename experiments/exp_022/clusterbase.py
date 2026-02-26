@@ -32,7 +32,7 @@ from tqdm.auto import tqdm
 SEED = 42
 BATCH_SIZE = 100
 N_PREV = 19
-REPEATS = 1
+REPEATS = 30
 
 
 QUAPY_BINARY_DATASETS = [
