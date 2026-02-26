@@ -4,6 +4,13 @@
 Uses APP prevalence protocol:
     prevalences = np.linspace(0.05, 0.95, n_prev)
     [[1-p, p] for p in prevalences] * repeats
+Pipeline:
+1) Load each binary dataset from Quapy.
+2) Fit StandardScaler + PCA(2) on training split.
+3) Compute one centroid for class 0 and one centroid for class 1 in PCA space.
+4) For each target prevalence (5..95 by 5), sample a batch from test (size=100).
+5) Classify each sample by nearest centroid (no classifier/regressor).
+6) Save per-instance and per-batch CSVs for future visualization/analysis.
 """
 
 from __future__ import annotations

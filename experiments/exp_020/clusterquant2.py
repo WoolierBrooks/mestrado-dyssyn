@@ -112,7 +112,7 @@ def run_experiment():
 
             moss_path = os.path.join(
                 MOSS_DIR,
-                f"moss_m_lite_{n_classes_real}.pkl"
+                f"moss_d_lite_{n_classes_real}.pkl"
             )
 
             if not os.path.exists(moss_path):
