@@ -19,8 +19,42 @@ from quapy.method.aggregative import EMQ
 
 from mlquantify.model_selection import UPP
 from mlquantify.utils import get_prev_from_labels
-
+from scipy.optimize import minimize
 warnings.filterwarnings("ignore")
+
+def estimate_prevalence_from_clusters(q, M):
+    """
+    Resolve:
+        min || M pi - q ||^2
+    s.t. pi >= 0, sum(pi)=1
+    """
+    n_classes = M.shape[1]
+
+    def objective(pi):
+        return np.linalg.norm(M @ pi - q)**2
+
+    constraints = [
+        {"type": "eq", "fun": lambda pi: np.sum(pi) - 1}
+    ]
+
+    bounds = [(0, 1)] * n_classes
+
+    pi0 = np.ones(n_classes) / n_classes
+
+    result = minimize(
+        objective,
+        pi0,
+        bounds=bounds,
+        constraints=constraints,
+        method="SLSQP"
+    )
+
+    if result.success:
+        return result.x
+    else:
+        return pi0
+    
+
 
 # ============================================================
 # CONFIG
@@ -112,7 +146,7 @@ def run_experiment():
 
             moss_path = os.path.join(
                 MOSS_DIR,
-                f"moss_m_lite_{n_classes_real}.pkl"
+                f"moss_d_lite_{n_classes_real}.pkl"
             )
 
             if not os.path.exists(moss_path):
@@ -148,9 +182,9 @@ def run_experiment():
 
         moss_model = regressores_treinados[n_classes_real]
 
-        # ======================================================
-        # 3️⃣ CLUSTERING BASE (KMeans)
-        # ======================================================
+        # ============================
+        # CLUSTERING BASE
+        # ============================
         n_clusters = n_classes_real * 3
 
         kmeans = KMeans(
@@ -163,19 +197,18 @@ def run_experiment():
 
         cluster_assign_tr = kmeans.predict(Xtr)
 
-        # Matriz M[k,c] = P(y=c | cluster=k)
+        # M[k,c] = P(cluster=k | y=c)
         M = np.zeros((n_clusters, n_classes_real))
 
-        for k in range(n_clusters):
-            idx = cluster_assign_tr == k
-            if np.sum(idx) > 0:
-                prev = get_prev_from_labels(
-                    ytr[idx],
-                    classes=np.arange(n_classes_real)
-                )
-                M[k] = np.array([prev[c] for c in sorted(prev)])
+        for c in range(n_classes_real):
+            idx_c = ytr == c
+            clusters_c = cluster_assign_tr[idx_c]
+
+            counts = np.bincount(clusters_c, minlength=n_clusters)
+            if counts.sum() > 0:
+                M[:, c] = counts / counts.sum()
             else:
-                M[k] = np.ones(n_classes_real) / n_classes_real
+                M[:, c] = np.ones(n_clusters) / n_clusters
 
         # ======================================================
         # 4️⃣ PROTOCOLO UPP
@@ -239,20 +272,19 @@ def run_experiment():
                     "erro": np.mean(np.abs(p_moss - p_real))
                 })
 
-            # ==================================================
-            # ClusterQuant
-            # ==================================================
+            # ==============================
+            # ClusterQuant-Mixture
+            # ==============================
             cluster_assign_batch = kmeans.predict(Xte[idx_batch])
 
             q = np.bincount(cluster_assign_batch, minlength=n_clusters)
             q = q / (q.sum() + 1e-12)
 
-            p_cluster = M.T @ q
-            p_cluster = p_cluster / (p_cluster.sum() + 1e-12)
+            p_cluster = estimate_prevalence_from_clusters(q, M)
 
             rows.append({
                 "dataset": ds_name,
-                "modelo": "ClusterQuant",
+                "modelo": "ClusterQuant_Mixture",
                 "n_classes_original": n_classes_real,
                 "erro": np.mean(np.abs(p_cluster - p_real))
             })

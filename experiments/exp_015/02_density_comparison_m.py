@@ -21,6 +21,7 @@ from scipy.stats import gaussian_kde
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from tqdm.auto import tqdm
 
 from mlquantify.model_selection import UPP
 
@@ -35,7 +36,11 @@ MOSS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/multicl
 BATCH_SIZE = 100
 GRID_SIZE = 200
 TOPK = 5
-MAX_CURVES = None  # None = use all curves
+MAX_CURVES_ENV = os.getenv("DENSITY_MAX_CURVES")
+MAX_CURVES = int(MAX_CURVES_ENV) if MAX_CURVES_ENV not in (None, "") else None  # None = use all curves
+SAMPLE_FRAC = float(os.getenv("DENSITY_SAMPLE_FRAC", "0.35"))
+MAX_SAMPLES_PER_DATASET = int(os.getenv("DENSITY_MAX_SAMPLES", "12000"))
+RF_N_ESTIMATORS = int(os.getenv("DENSITY_RF_TREES", "200"))
 
 OUTPUT_DIR = os.path.join(os.getcwd(), "results", "exp_015_density_multiclass")
 
@@ -70,6 +75,46 @@ def load_dataset(csv_path: str) -> Tuple[np.ndarray, np.ndarray]:
     mapper = {c: i for i, c in enumerate(classes)}
     y = np.array([mapper[v] for v in y], dtype=int)
     return X, y
+
+
+def sample_dataset(
+    X: np.ndarray,
+    y: np.ndarray,
+    frac: float = SAMPLE_FRAC,
+    max_samples: int = MAX_SAMPLES_PER_DATASET,
+    seed: int = SEED,
+) -> Tuple[np.ndarray, np.ndarray]:
+    n = len(y)
+    if n == 0:
+        return X, y
+
+    frac = max(0.0, min(1.0, float(frac)))
+    if frac <= 0:
+        frac = 1.0
+
+    target = int(np.ceil(n * frac))
+    if max_samples > 0:
+        target = min(target, max_samples)
+
+    n_classes = len(np.unique(y))
+    target = max(target, n_classes * 2)
+
+    if target >= n:
+        return X, y
+
+    idx_all = np.arange(n)
+    try:
+        idx_sample, _ = train_test_split(
+            idx_all,
+            train_size=target,
+            stratify=y,
+            random_state=seed,
+        )
+    except ValueError:
+        rng = np.random.default_rng(seed)
+        idx_sample = rng.choice(idx_all, size=target, replace=False)
+
+    return X[idx_sample], y[idx_sample]
 
 
 def random_upp_batch_idx(Xte: np.ndarray, yte: np.ndarray, seed: int = SEED) -> np.ndarray:
@@ -199,13 +244,18 @@ def save_group_png(group: List[Dict], title: str, out_path: str) -> None:
         )
         row_ax.text(0.01, 0.92, txt, fontsize=10, transform=row_ax.transAxes)
 
-        inset_h = 0.75 / max(1, row["n_classes"])
-        for c in range(row["n_classes"]):
-            ax_in = row_ax.inset_axes([0.03, 0.12 + (row["n_classes"] - 1 - c) * inset_h, 0.94, inset_h - 0.03])
+        n_classes = max(1, int(row["n_classes"]))
+        available_h = 0.75
+        gap = 0.01
+        inset_h = max(0.02, (available_h - gap * (n_classes - 1)) / n_classes)
+
+        for c in range(n_classes):
+            y0 = 0.12 + (n_classes - 1 - c) * (inset_h + gap)
+            ax_in = row_ax.inset_axes([0.03, y0, 0.94, inset_h])
             ax_in.plot(grid, row["real_kdes"][c], label=f"Real c={c}", linewidth=1.8)
             ax_in.plot(grid, row["moss_kdes"][c], label=f"MoSS c={c}", linewidth=1.8)
             ax_in.set_ylabel("dens")
-            if c == row["n_classes"] - 1:
+            if c == n_classes - 1:
                 ax_in.set_xlabel("score")
             ax_in.legend(loc="upper right", fontsize=8)
 
@@ -270,15 +320,27 @@ def run() -> None:
     if not datasets:
         raise RuntimeError(f"Nenhum CSV encontrado em {DATASETS_ROOT}")
 
-    for ds in datasets:
+    print(
+        "⚙️ Config: "
+        f"sample_frac={SAMPLE_FRAC}, max_samples={MAX_SAMPLES_PER_DATASET}, "
+        f"rf_trees={RF_N_ESTIMATORS}, max_curves={MAX_CURVES}"
+    )
+
+    for ds in tqdm(datasets, desc="Processando datasets", unit="dataset"):
         X, y = load_dataset(os.path.join(DATASETS_ROOT, ds))
+        original_size = len(y)
+        X, y = sample_dataset(X, y, frac=SAMPLE_FRAC, max_samples=MAX_SAMPLES_PER_DATASET, seed=SEED)
+        sampled_size = len(y)
         n_classes = len(np.unique(y))
 
-        Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.5, stratify=y, random_state=SEED)
+        try:
+            Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.5, stratify=y, random_state=SEED)
+        except ValueError:
+            Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.5, random_state=SEED)
         sc = StandardScaler().fit(Xtr)
         Xtr, Xte = sc.transform(Xtr), sc.transform(Xte)
 
-        clf = RandomForestClassifier(n_estimators=300, random_state=SEED, n_jobs=-1)
+        clf = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, random_state=SEED, n_jobs=-1)
         clf.fit(Xtr, ytr)
 
         idx = random_upp_batch_idx(Xte, yte)
@@ -296,6 +358,8 @@ def run() -> None:
                     "best_curve_id": None,
                     "best_kde_l1": np.nan,
                     "moss_file": None,
+                    "n_samples_original": original_size,
+                    "n_samples_used": sampled_size,
                     "status": "moss_not_found_or_invalid",
                 }
             )
@@ -310,6 +374,8 @@ def run() -> None:
                 "best_curve_id": best["best_curve_id"],
                 "best_kde_l1": best["best_l1"],
                 "moss_file": best["moss_file"],
+                "n_samples_original": original_size,
+                "n_samples_used": sampled_size,
                 "status": "ok",
             }
         )
