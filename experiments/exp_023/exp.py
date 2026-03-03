@@ -121,6 +121,22 @@ class ClusterKMeansModel:
 
 
 def to_pos_prev(pred) -> float:
+    """Convert quantifier output to positive-class prevalence.
+
+    Supports scalar, list/ndarray with 1 or 2 entries, and dict-like outputs
+    such as {0: p0, 1: p1} or {"0": p0, "1": p1}.
+    """
+    if isinstance(pred, dict):
+        for key in (1, "1", True):
+            if key in pred:
+                return float(pred[key])
+        vals = list(pred.values())
+        if len(vals) == 1:
+            return float(vals[0])
+        if len(vals) >= 2:
+            return float(vals[1])
+        raise ValueError("Empty dict prevalence output")
+
     arr = np.asarray(pred)
     if arr.ndim == 0:
         return float(arr)
@@ -129,7 +145,7 @@ def to_pos_prev(pred) -> float:
         return float(arr[0])
     if arr.size >= 2:
         return float(arr[1])
-    return float(arr[0])
+    raise ValueError("Empty prevalence output")
 
 
 def generate_prevalences(n_prev: int, repeats: int) -> List[List[float]]:
