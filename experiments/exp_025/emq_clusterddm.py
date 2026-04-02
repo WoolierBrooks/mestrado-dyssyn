@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-exp_023_multiclass
-Clusters (PCA, GMM, KMeans) vs EMQ_BCTS
+exp_025_multiclass
+Direct Distribution Matching (PCA, GMM, KMeans) vs EMQ_BCTS
 UPP protocol (multiclass)
 """
 
@@ -14,14 +14,12 @@ import time
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.ensemble import RandomForestClassifier
 
 from tqdm import tqdm
 
 # QuaPy
-import quapy as qp
 from quapy.method.aggregative import EMQ
 
 # mlquantify
@@ -33,13 +31,14 @@ warnings.filterwarnings("ignore")
 # ============================================================
 # CONFIG
 # ============================================================
+
 SEED = 42
 BATCH_SIZE = 100
 REPEATS = 30
 N_PREVALENCES = 10
 
 DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/multiclass"
-OUTPUT_CSV = "results/exp_023_multiclass/results.csv"
+OUTPUT_CSV = "results/exp_025_multiclass/results.csv"
 
 np.random.seed(SEED)
 
@@ -56,110 +55,100 @@ def prevalence_vector_from_dict(p_dict, K):
     return np.array([p_dict[k] for k in range(K)])
 
 
+def project_to_simplex(v):
+    """Projection onto probability simplex."""
+    v = np.asarray(v)
+    n = len(v)
+
+    u = np.sort(v)[::-1]
+    cssv = np.cumsum(u)
+    rho = np.nonzero(u * np.arange(1, n + 1) > (cssv - 1))[0][-1]
+    theta = (cssv[rho] - 1) / (rho + 1.0)
+    w = np.maximum(v - theta, 0)
+    return w
+
+
 # ============================================================
-# CLUSTER MODELS
+# DIRECT DISTRIBUTION MATCHING MODELS
 # ============================================================
 
-class ClusterPCAModel:
+class DDMModel:
+    """
+    Base class for Direct Distribution Matching.
+    """
 
-    def __init__(self, scaler, pca, centroids):
+    def __init__(self, scaler, pca, centroids_matrix):
         self.scaler = scaler
         self.pca = pca
-        self.centroids = centroids
+        self.M = centroids_matrix  # shape (d, K)
 
-    def predict(self, X):
-        Xp = self.pca.transform(self.scaler.transform(X))
-        dists = np.stack(
-            [np.linalg.norm(Xp - c, axis=1) for c in self.centroids],
-            axis=1
-        )
-        return np.argmin(dists, axis=1)
+    def predict_prevalence(self, X):
 
-
-class ClusterGMMModel:
-
-    def __init__(self, scaler, pca, gmms, priors):
-        self.scaler = scaler
-        self.pca = pca
-        self.gmms = gmms
-        self.priors = priors
-
-    def predict(self, X):
         Xp = self.pca.transform(self.scaler.transform(X))
 
-        scores = []
-        for gmm, prior in zip(self.gmms, self.priors):
-            s = gmm.score_samples(Xp) + np.log(prior + 1e-12)
-            scores.append(s)
+        mu_test = Xp.mean(axis=0)  # (d,)
 
-        scores = np.stack(scores, axis=1)
-        return np.argmax(scores, axis=1)
+        # solve M p ≈ mu_test
+        p_hat, *_ = np.linalg.lstsq(self.M, mu_test, rcond=None)
 
+        p_hat = project_to_simplex(p_hat)
 
-class ClusterKMeansModel:
-
-    def __init__(self, scaler, pca, kmeans, cluster_to_label):
-        self.scaler = scaler
-        self.pca = pca
-        self.kmeans = kmeans
-        self.cluster_to_label = cluster_to_label
-
-    def predict(self, X):
-        Xp = self.pca.transform(self.scaler.transform(X))
-        clusters = self.kmeans.predict(Xp)
-        return np.array([self.cluster_to_label[c] for c in clusters])
+        return p_hat
 
 
 # ============================================================
 # FIT FUNCTIONS
 # ============================================================
 
-def fit_cluster_pca(Xtr, ytr, K):
+def fit_ddm_pca(Xtr, ytr, K):
+
     scaler = StandardScaler().fit(Xtr)
     Xt = scaler.transform(Xtr)
+
     pca = PCA(n_components=2, random_state=SEED).fit(Xt)
     Xp = pca.transform(Xt)
 
     centroids = [Xp[ytr == k].mean(axis=0) for k in range(K)]
-    return ClusterPCAModel(scaler, pca, centroids)
+    M = np.stack(centroids, axis=1)  # (d, K)
+
+    return DDMModel(scaler, pca, M)
 
 
-def fit_cluster_gmm(Xtr, ytr, K):
+def fit_ddm_gmm(Xtr, ytr, K):
+
     scaler = StandardScaler().fit(Xtr)
     Xt = scaler.transform(Xtr)
+
     pca = PCA(n_components=2, random_state=SEED).fit(Xt)
     Xp = pca.transform(Xt)
 
-    gmms = []
-    priors = []
+    means = []
 
     for k in range(K):
         Xk = Xp[ytr == k]
         gmm = GaussianMixture(n_components=1, random_state=SEED).fit(Xk)
-        gmms.append(gmm)
-        priors.append(np.mean(ytr == k))
+        means.append(gmm.means_[0])
 
-    return ClusterGMMModel(scaler, pca, gmms, priors)
+    M = np.stack(means, axis=1)
+
+    return DDMModel(scaler, pca, M)
 
 
-def fit_cluster_kmeans(Xtr, ytr, K):
+def fit_ddm_kmeans_supervised(Xtr, ytr, K):
+    """
+    Supervised centroid version (class means).
+    """
+
     scaler = StandardScaler().fit(Xtr)
     Xt = scaler.transform(Xtr)
+
     pca = PCA(n_components=2, random_state=SEED).fit(Xt)
     Xp = pca.transform(Xt)
 
-    kmeans = KMeans(n_clusters=K, random_state=SEED, n_init=10)
-    clusters = kmeans.fit_predict(Xp)
+    centroids = [Xp[ytr == k].mean(axis=0) for k in range(K)]
+    M = np.stack(centroids, axis=1)
 
-    cluster_to_label = {}
-    for c in range(K):
-        yc = ytr[clusters == c]
-        if len(yc) == 0:
-            cluster_to_label[c] = 0
-        else:
-            cluster_to_label[c] = np.bincount(yc).argmax()
-
-    return ClusterKMeansModel(scaler, pca, kmeans, cluster_to_label)
+    return DDMModel(scaler, pca, M)
 
 
 # ============================================================
@@ -189,7 +178,7 @@ def run_experiment():
         K = len(np.unique(y))
         print(f"   🔢 Classes: {K}")
 
-        X = StandardScaler().fit_transform(df.iloc[:, :-1].values)
+        X = df.iloc[:, :-1].values
 
         Xtr, Xte, ytr, yte = train_test_split(
             X, y,
@@ -199,14 +188,17 @@ def run_experiment():
         )
 
         # --------------------------
-        # Fit Models
+        # Fit DDM models
         # --------------------------
-        cluster_models = {
-            "cluster_pca": fit_cluster_pca(Xtr, ytr, K),
-            "cluster_gmm": fit_cluster_gmm(Xtr, ytr, K),
-            "cluster_kmeans": fit_cluster_kmeans(Xtr, ytr, K),
+        ddm_models = {
+            "DDM_PCA": fit_ddm_pca(Xtr, ytr, K),
+            "DDM_GMM": fit_ddm_gmm(Xtr, ytr, K),
+            "DDM_KMeansSup": fit_ddm_kmeans_supervised(Xtr, ytr, K),
         }
 
+        # --------------------------
+        # EMQ + BCTS
+        # --------------------------
         clf = RandomForestClassifier(
             n_estimators=300,
             n_jobs=-1,
@@ -246,19 +238,12 @@ def run_experiment():
 
             p_real = prevalence_vector_from_dict(p_real_dict, K)
 
-            # -------- Clusters --------
-            for name, model in cluster_models.items():
+            # -------- DDM --------
+            for name, model in ddm_models.items():
 
                 t0 = time.perf_counter()
-                yhat = model.predict(Xte[idx_batch])
+                p_pred = model.predict_prevalence(Xte[idx_batch])
                 elapsed = time.perf_counter() - t0
-
-                p_pred = get_prev_from_labels(
-                    yhat,
-                    classes=np.arange(K)
-                )
-
-                p_pred = prevalence_vector_from_dict(p_pred, K)
 
                 rows.append({
                     "dataset": ds_name,
