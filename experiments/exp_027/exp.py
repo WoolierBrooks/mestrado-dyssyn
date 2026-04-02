@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""exp_023 - unified comparison: cluster methods vs DyS(Topsoe).
+"""exp_027 - unified comparison with cluster_pca using test-time reclustering.
 
 Models compared (binary quantification):
-- cluster_pca: nearest class centroid in PCA(2)
+- cluster_pca: train supervised centroids + test reclustering (KMeans) + centroid matching
 - cluster_gmm: class-conditional GMMs in PCA(2)
 - cluster_kmeans: unsupervised KMeans in PCA(2) + cluster->label mapping
 - dys_topsoe: DyS quantifier with Topsoe distance
@@ -77,55 +77,75 @@ class BatchSpec:
     indices: np.ndarray
 
 
+def _assign_test_clusters_to_train_labels(test_centers: np.ndarray, train_c0: np.ndarray, train_c1: np.ndarray) -> Dict[int, int]:
+    """Map cluster id -> label {0,1} minimizing total train/test centroid distance."""
+    d00 = np.linalg.norm(test_centers[0] - train_c0)
+    d01 = np.linalg.norm(test_centers[0] - train_c1)
+    d10 = np.linalg.norm(test_centers[1] - train_c0)
+    d11 = np.linalg.norm(test_centers[1] - train_c1)
+
+    cost_a = d00 + d11  # c0->0, c1->1
+    cost_b = d01 + d10  # c0->1, c1->0
+    return {0: 0, 1: 1} if cost_a <= cost_b else {0: 1, 1: 0}
+
+
 @dataclass
 class ClusterPCAModel:
     scaler: StandardScaler
     pca: PCA
     centroid_0: np.ndarray
     centroid_1: np.ndarray
+    base_seed: int
 
     def predict_labels(self, X: np.ndarray) -> np.ndarray:
+        """Recompute test centroids (unsupervised), align with train centroids, then label."""
         Xp = self.pca.transform(self.scaler.transform(X))
-        d0 = np.linalg.norm(Xp - self.centroid_0.reshape(1, -1), axis=1)
-        d1 = np.linalg.norm(Xp - self.centroid_1.reshape(1, -1), axis=1)
-        return (d1 < d0).astype(int)
+
+        km = KMeans(n_clusters=2, random_state=self.base_seed + len(X), n_init=10)
+        test_cluster_ids = km.fit_predict(Xp)
+        test_centers = km.cluster_centers_
+
+        mapping = _assign_test_clusters_to_train_labels(test_centers, self.centroid_0, self.centroid_1)
+        return np.array([mapping[int(cid)] for cid in test_cluster_ids], dtype=int)
 
 
 @dataclass
 class ClusterGMMModel:
     scaler: StandardScaler
     pca: PCA
-    gmm0: GaussianMixture
-    gmm1: GaussianMixture
-    prior0: float
-    prior1: float
+    centroid_0: np.ndarray
+    centroid_1: np.ndarray
+    base_seed: int
 
     def predict_labels(self, X: np.ndarray) -> np.ndarray:
+        """Recompute test clusters with GMM and align them to train centroids."""
         Xp = self.pca.transform(self.scaler.transform(X))
-        s0 = self.gmm0.score_samples(Xp) + np.log(max(self.prior0, 1e-12))
-        s1 = self.gmm1.score_samples(Xp) + np.log(max(self.prior1, 1e-12))
-        return (s1 > s0).astype(int)
+        gmm = GaussianMixture(n_components=2, random_state=self.base_seed + len(X), covariance_type="full")
+        test_cluster_ids = gmm.fit_predict(Xp)
+        test_centers = gmm.means_
+        mapping = _assign_test_clusters_to_train_labels(test_centers, self.centroid_0, self.centroid_1)
+        return np.array([mapping[int(cid)] for cid in test_cluster_ids], dtype=int)
 
 
 @dataclass
 class ClusterKMeansModel:
     scaler: StandardScaler
     pca: PCA
-    kmeans: KMeans
-    cluster_to_label: Dict[int, int]
+    centroid_0: np.ndarray
+    centroid_1: np.ndarray
+    base_seed: int
 
     def predict_labels(self, X: np.ndarray) -> np.ndarray:
+        """Recompute test clusters with KMeans and align them to train centroids."""
         Xp = self.pca.transform(self.scaler.transform(X))
-        clusters = self.kmeans.predict(Xp)
-        return np.array([self.cluster_to_label[int(c)] for c in clusters], dtype=int)
+        kmeans = KMeans(n_clusters=2, random_state=self.base_seed + len(X), n_init=10)
+        test_cluster_ids = kmeans.fit_predict(Xp)
+        test_centers = kmeans.cluster_centers_
+        mapping = _assign_test_clusters_to_train_labels(test_centers, self.centroid_0, self.centroid_1)
+        return np.array([mapping[int(cid)] for cid in test_cluster_ids], dtype=int)
 
 
 def to_pos_prev(pred) -> float:
-    """Convert quantifier output to positive-class prevalence.
-
-    Supports scalar, list/ndarray with 1 or 2 entries, and dict-like outputs
-    such as {0: p0, 1: p1} or {"0": p0, "1": p1}.
-    """
     if isinstance(pred, dict):
         for key in (1, "1", True):
             if key in pred:
@@ -215,7 +235,7 @@ def fit_cluster_pca(Xtr: np.ndarray, ytr: np.ndarray, seed: int) -> ClusterPCAMo
     Xp = pca.transform(Xt)
     c0 = Xp[ytr == 0].mean(axis=0)
     c1 = Xp[ytr == 1].mean(axis=0)
-    return ClusterPCAModel(scaler=scaler, pca=pca, centroid_0=c0, centroid_1=c1)
+    return ClusterPCAModel(scaler=scaler, pca=pca, centroid_0=c0, centroid_1=c1, base_seed=seed)
 
 
 def fit_cluster_gmm(Xtr: np.ndarray, ytr: np.ndarray, seed: int, n_components: int = 1) -> ClusterGMMModel:
@@ -226,17 +246,9 @@ def fit_cluster_gmm(Xtr: np.ndarray, ytr: np.ndarray, seed: int, n_components: i
     pca = PCA(n_components=2, random_state=seed).fit(Xt)
     Xp = pca.transform(Xt)
 
-    X0 = Xp[ytr == 0]
-    X1 = Xp[ytr == 1]
-    c0 = max(1, min(n_components, len(X0)))
-    c1 = max(1, min(n_components, len(X1)))
-
-    gmm0 = GaussianMixture(n_components=c0, random_state=seed).fit(X0)
-    gmm1 = GaussianMixture(n_components=c1, random_state=seed).fit(X1)
-
-    prior1 = float(np.mean(ytr == 1))
-    prior0 = 1.0 - prior1
-    return ClusterGMMModel(scaler=scaler, pca=pca, gmm0=gmm0, gmm1=gmm1, prior0=prior0, prior1=prior1)
+    c0 = Xp[ytr == 0].mean(axis=0)
+    c1 = Xp[ytr == 1].mean(axis=0)
+    return ClusterGMMModel(scaler=scaler, pca=pca, centroid_0=c0, centroid_1=c1, base_seed=seed)
 
 
 def fit_cluster_kmeans(Xtr: np.ndarray, ytr: np.ndarray, seed: int) -> ClusterKMeansModel:
@@ -247,18 +259,9 @@ def fit_cluster_kmeans(Xtr: np.ndarray, ytr: np.ndarray, seed: int) -> ClusterKM
     pca = PCA(n_components=2, random_state=seed).fit(Xt)
     Xp = pca.transform(Xt)
 
-    kmeans = KMeans(n_clusters=2, random_state=seed, n_init=10)
-    clusters = kmeans.fit_predict(Xp)
-
-    cluster_to_label: Dict[int, int] = {}
-    for c in [0, 1]:
-        yc = ytr[clusters == c]
-        if len(yc) == 0:
-            cluster_to_label[c] = 0
-        else:
-            cluster_to_label[c] = int(np.mean(yc) >= 0.5)
-
-    return ClusterKMeansModel(scaler=scaler, pca=pca, kmeans=kmeans, cluster_to_label=cluster_to_label)
+    c0 = Xp[ytr == 0].mean(axis=0)
+    c1 = Xp[ytr == 1].mean(axis=0)
+    return ClusterKMeansModel(scaler=scaler, pca=pca, centroid_0=c0, centroid_1=c1, base_seed=seed)
 
 
 def evaluate_label_model(model_name: str, model, Xte: np.ndarray, yte: np.ndarray, batches: Sequence[BatchSpec]) -> List[Dict]:
@@ -342,7 +345,7 @@ def run_experiment(
     model_names = ["cluster_pca", "cluster_gmm", "cluster_kmeans", "dys_topsoe"]
     total_steps = len(list(datasets)) * len(app_prevalences) * len(model_names)
 
-    with tqdm(total=total_steps, desc="exp_023", unit="batch") as pbar:
+    with tqdm(total=total_steps, desc="exp_027", unit="batch") as pbar:
         for ds_i, ds_name in enumerate(datasets):
             try:
                 Xtr, ytr, Xte, yte = load_binary_quapy_dataset(ds_name)
@@ -378,7 +381,7 @@ def run_experiment(
             )
 
             try:
-                pca_model = fit_cluster_pca(Xtr, ytr, seed=seed)
+                pca_model = fit_cluster_pca(Xtr, ytr, seed=seed + ds_i)
                 ds_rows = evaluate_label_model("cluster_pca", pca_model, Xte, yte, batches)
                 for r in ds_rows:
                     r["dataset"] = ds_name
@@ -459,7 +462,6 @@ def run_experiment(
             pbar.update(len(app_prevalences))
 
             try:
-                # Keep preprocessing equivalent to other models
                 scaler = StandardScaler().fit(Xtr)
                 Xtr_scaled = scaler.transform(Xtr)
                 Xte_scaled = scaler.transform(Xte)
@@ -496,7 +498,7 @@ def run_experiment(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="exp_023 - compare cluster models vs DyS(Topsoe)")
+    parser = argparse.ArgumentParser(description="exp_027 - compare cluster models vs DyS(Topsoe)")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--n-prev", type=int, default=N_PREV)
     parser.add_argument("--repeats", type=int, default=REPEATS)
