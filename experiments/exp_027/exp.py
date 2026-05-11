@@ -16,6 +16,7 @@ import argparse
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
@@ -211,7 +212,15 @@ def build_batches(yte: np.ndarray, app_prevalences: Sequence[Sequence[float]], n
 
 
 def load_binary_quapy_dataset(name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    ds = qp.datasets.fetch_UCIBinaryDataset(name, verbose=False)
+    try:
+        ds = qp.datasets.fetch_UCIBinaryDataset(name, verbose=False)
+    except ModuleNotFoundError as e:
+        # Common when an old Quapy cache was pickled with an incompatible NumPy.
+        if "numpy._core.numeric" not in str(e):
+            raise
+        _cleanup_quapy_cache_for_dataset(name)
+        ds = qp.datasets.fetch_UCIBinaryDataset(name, verbose=False)
+
     Xtr = np.asarray(ds.training.X)
     ytr_raw = np.asarray(ds.training.y)
     Xte = np.asarray(ds.test.X)
@@ -224,6 +233,26 @@ def load_binary_quapy_dataset(name: str) -> Tuple[np.ndarray, np.ndarray, np.nda
     ytr = (ytr_raw == pos_class).astype(int)
     yte = (yte_raw == pos_class).astype(int)
     return Xtr, ytr, Xte, yte
+
+
+def _cleanup_quapy_cache_for_dataset(dataset_name: str) -> None:
+    """Best-effort cleanup for broken cached pickles of a specific Quapy dataset."""
+    safe_name = dataset_name.replace(".", "_")
+    roots = [
+        Path(os.environ.get("QUAPY_HOME", "")),
+        Path.home() / ".quapy",
+        Path.home() / ".quapy_data",
+        Path.home() / "quapy_data",
+    ]
+    for root in roots:
+        if not root or not root.exists():
+            continue
+        for pattern in [f"**/*{dataset_name}*.pkl", f"**/*{safe_name}*.pkl", f"**/*{dataset_name}*.pickle", f"**/*{safe_name}*.pickle"]:
+            for file in root.glob(pattern):
+                try:
+                    file.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
 
 def fit_cluster_pca(Xtr: np.ndarray, ytr: np.ndarray, seed: int) -> ClusterPCAModel:
