@@ -24,7 +24,6 @@ datasets/multiclass/
 *.npz
 *.pt
 *.pickle
-*.pkl
 *.csv
 
 # OS files
