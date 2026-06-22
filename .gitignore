@@ -31,3 +31,8 @@ datasets/multiclass/
 Thumbs.db
 
 datasets/multiclass/
+
+*.pkl
+datasets/
+**/moss_outputs/
+**/results/

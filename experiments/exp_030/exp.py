@@ -1,0 +1,485 @@
+import os
+import pickle
+import numpy as np
+import pandas as pd
+import warnings
+
+from scipy.stats import skew, kurtosis
+
+from sklearn.model_selection import (
+    train_test_split,
+    cross_val_predict
+)
+
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    RandomForestClassifier
+)
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+
+from tqdm import tqdm
+
+# ==============================
+# Quantificação (QuaPy)
+# ==============================
+import quapy as qp
+from quapy.method.aggregative import EMQ
+
+from mlquantify.model_selection import UPP
+from mlquantify.utils import get_prev_from_labels
+
+warnings.filterwarnings("ignore")
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+SEED = 42
+BATCH_SIZE = 100
+
+MOSS_DIR = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/multiclass"
+DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/multiclass"
+
+OUTPUT_CSV = "m_30_cluster_vs_emq_calibrated.csv"
+
+np.random.seed(SEED)
+
+# ============================================================
+# FEATURES (MoSS)
+# ============================================================
+
+def baseline_features(scores_matrix, target_n_classes):
+
+    feats = []
+
+    for c in range(scores_matrix.shape[1]):
+
+        s = scores_matrix[:, c]
+
+        feats.extend([
+            np.mean(s),
+            np.var(s),
+            skew(s),
+            kurtosis(s)
+        ])
+
+    total_expected = 4 * target_n_classes
+
+    if len(feats) < total_expected:
+        feats.extend(
+            [0] * (total_expected - len(feats))
+        )
+
+    return np.array(feats[:total_expected])
+
+# ============================================================
+# EXPERIMENT
+# ============================================================
+
+def run_experiment():
+
+    datasets = sorted(
+        f for f in os.listdir(DATASETS_ROOT)
+        if f.endswith(".csv")
+    )
+
+    regressores_treinados = {}
+
+    rows = []
+
+    for ds_name in datasets:
+
+        print(f"\n📂 Dataset: {ds_name}")
+
+        df = pd.read_csv(
+            os.path.join(DATASETS_ROOT, ds_name)
+        )
+
+        y = df.iloc[:, -1].values
+
+        if y.min() > 0:
+            y -= y.min()
+
+        n_classes_real = len(np.unique(y))
+
+        print(f"   🔢 Número de classes: {n_classes_real}")
+
+        X = StandardScaler().fit_transform(
+            df.iloc[:, :-1].values
+        )
+
+        # ======================================================
+        # TRAIN / TEST SPLIT
+        # ======================================================
+
+        Xtr, Xte, ytr, yte = train_test_split(
+            X,
+            y,
+            test_size=0.5,
+            stratify=y,
+            random_state=SEED
+        )
+
+        # ======================================================
+        # 1️⃣ CLASSIFICADOR BASE + EMQ
+        # ======================================================
+
+        clf = RandomForestClassifier(
+            n_estimators=300,
+            n_jobs=-1,
+            random_state=SEED
+        )
+
+        emq = EMQ(
+            clf,
+            calib="bcts",
+            val_split=0.2,
+            exact_train_prev=True,
+            on_calib_error="backup"
+        )
+
+        emq.fit(Xtr, ytr)
+
+        # pega o classifier treinado internamente pelo EMQ
+        clf = emq.classifier
+
+        # ======================================================
+        # 🔥 OOF PROBABILITIES
+        # ======================================================
+
+        print("      🔄 Generating OOF probabilities...")
+
+        oof_scores = cross_val_predict(
+            RandomForestClassifier(
+                n_estimators=300,
+                n_jobs=-1,
+                random_state=SEED
+            ),
+            Xtr,
+            ytr,
+            cv=5,
+            method="predict_proba",
+            n_jobs=-1
+        )
+
+        # ======================================================
+        # 2️⃣ MoSS + CALIBRAÇÃO
+        # ======================================================
+
+        if n_classes_real not in regressores_treinados:
+
+            moss_path = os.path.join(
+                MOSS_DIR,
+                f"moss_d_lite_{n_classes_real}.pkl"
+            )
+
+            if not os.path.exists(moss_path):
+
+                print(
+                    f"⚠️ moss_d_lite_{n_classes_real}.pkl não encontrado."
+                )
+
+                regressores_treinados[n_classes_real] = None
+
+            else:
+
+                print(
+                    f"🧠 Treinando MoSS_{n_classes_real}_CALIBRATED..."
+                )
+
+                with open(moss_path, "rb") as f:
+                    synthetic_distributions = pickle.load(f)
+
+                # ==================================================
+                # SINTÉTICO (MoSS)
+                # ==================================================
+
+                X_m = []
+                y_m = []
+
+                for (alpha_prev, _), curves in synthetic_distributions.items():
+
+                    for scores_matrix in curves:
+
+                        feat = baseline_features(
+                            scores_matrix,
+                            n_classes_real
+                        )
+
+                        X_m.append(feat)
+
+                        y_m.append(list(alpha_prev))
+
+                X_m = np.array(X_m)
+                y_m = np.array(y_m)
+
+                print(
+                    f"      🧪 Synthetic samples: {len(X_m)}"
+                )
+
+                # ==================================================
+                # 🔥 REAL CALIBRATION SET
+                # ==================================================
+
+                X_real = []
+                y_real = []
+
+                protocol_calib = UPP(
+                    batch_size=BATCH_SIZE,
+                    n_prevalences=10,
+                    repeats=15,
+                    random_state=SEED
+                )
+
+                for idx_batch in protocol_calib.split(Xtr, ytr):
+
+                    scores_batch = oof_scores[idx_batch]
+
+                    feat = baseline_features(
+                        scores_batch,
+                        n_classes_real
+                    )
+
+                    prev_real = get_prev_from_labels(
+                        ytr[idx_batch],
+                        classes=np.arange(n_classes_real)
+                    )
+
+                    if isinstance(prev_real, dict):
+
+                        prev_real = np.array([
+                            prev_real[k]
+                            for k in sorted(prev_real)
+                        ])
+
+                    X_real.append(feat)
+                    y_real.append(prev_real)
+
+                X_real = np.array(X_real)
+                y_real = np.array(y_real)
+
+                print(
+                    f"      🔥 Real calibration samples: {len(X_real)}"
+                )
+
+                # ==================================================
+                # 🔥 HYBRID TRAINING
+                # ==================================================
+
+                X_final = np.vstack([
+                    X_m,
+                    X_real
+                ])
+
+                y_final = np.vstack([
+                    y_m,
+                    y_real
+                ])
+
+                # peso maior para batches reais
+                weights = np.concatenate([
+                    np.ones(len(X_m)),
+                    np.ones(len(X_real)) * 5
+                ])
+
+                model = RandomForestRegressor(
+                    n_estimators=300,
+                    n_jobs=-1,
+                    random_state=SEED,
+                    min_samples_leaf=2
+                )
+
+                model.fit(
+                    X_final,
+                    y_final,
+                    sample_weight=weights
+                )
+
+                regressores_treinados[n_classes_real] = model
+
+                print(
+                    f"✅ MoSS_{n_classes_real}_CALIBRATED treinado!"
+                )
+
+        moss_model = regressores_treinados[n_classes_real]
+
+        # ======================================================
+        # 3️⃣ CLUSTERING BASE (KMeans)
+        # ======================================================
+
+        n_clusters = n_classes_real * 3
+
+        kmeans = KMeans(
+            n_clusters=n_clusters,
+            random_state=SEED,
+            n_init=10
+        )
+
+        kmeans.fit(Xtr)
+
+        cluster_assign_tr = kmeans.predict(Xtr)
+
+        # Matriz M[k,c] = P(y=c | cluster=k)
+
+        M = np.zeros(
+            (n_clusters, n_classes_real)
+        )
+
+        for k in range(n_clusters):
+
+            idx = cluster_assign_tr == k
+
+            if np.sum(idx) > 0:
+
+                prev = get_prev_from_labels(
+                    ytr[idx],
+                    classes=np.arange(n_classes_real)
+                )
+
+                M[k] = np.array([
+                    prev[c]
+                    for c in sorted(prev)
+                ])
+
+            else:
+
+                M[k] = (
+                    np.ones(n_classes_real)
+                    / n_classes_real
+                )
+
+        # ======================================================
+        # 4️⃣ PROTOCOLO UPP
+        # ======================================================
+
+        protocol = UPP(
+            batch_size=BATCH_SIZE,
+            n_prevalences=10,
+            repeats=30,
+            random_state=SEED
+        )
+
+        for idx_batch in tqdm(
+            protocol.split(Xte, yte),
+            total=protocol.get_n_combinations(),
+            desc="Protocolo UPP"
+        ):
+
+            p_real_raw = get_prev_from_labels(
+                yte[idx_batch],
+                classes=np.arange(n_classes_real)
+            )
+
+            if isinstance(p_real_raw, dict):
+
+                p_real = np.array([
+                    p_real_raw[k]
+                    for k in sorted(p_real_raw)
+                ])
+
+            else:
+
+                p_real = np.array(p_real_raw)
+
+            # ==================================================
+            # EMQ
+            # ==================================================
+
+            p_emq = emq.predict(
+                Xte[idx_batch]
+            )
+
+            rows.append({
+                "dataset": ds_name,
+                "modelo": "EMQ_BCTS",
+                "n_classes_original": n_classes_real,
+                "erro": np.mean(
+                    np.abs(p_emq - p_real)
+                )
+            })
+
+            # ==================================================
+            # MoSS CALIBRATED
+            # ==================================================
+
+            if moss_model is not None:
+
+                scores_batch = clf.predict_proba(
+                    Xte[idx_batch]
+                )
+
+                f_vec = baseline_features(
+                    scores_batch,
+                    n_classes_real
+                ).reshape(1, -1)
+
+                p_moss = moss_model.predict(
+                    f_vec
+                )[0][:n_classes_real]
+
+                p_moss = np.clip(
+                    p_moss,
+                    0,
+                    1
+                )
+
+                p_moss /= (
+                    p_moss.sum() + 1e-12
+                )
+
+                rows.append({
+                    "dataset": ds_name,
+                    "modelo": f"MoSS_{n_classes_real}_CALIBRATED",
+                    "n_classes_original": n_classes_real,
+                    "erro": np.mean(
+                        np.abs(p_moss - p_real)
+                    )
+                })
+
+            # ==================================================
+            # ClusterQuant
+            # ==================================================
+
+            cluster_assign_batch = kmeans.predict(
+                Xte[idx_batch]
+            )
+
+            q = np.bincount(
+                cluster_assign_batch,
+                minlength=n_clusters
+            )
+
+            q = q / (q.sum() + 1e-12)
+
+            p_cluster = M.T @ q
+
+            p_cluster = (
+                p_cluster
+                / (p_cluster.sum() + 1e-12)
+            )
+
+            rows.append({
+                "dataset": ds_name,
+                "modelo": "ClusterQuant",
+                "n_classes_original": n_classes_real,
+                "erro": np.mean(
+                    np.abs(p_cluster - p_real)
+                )
+            })
+
+        pd.DataFrame(rows).to_csv(
+            OUTPUT_CSV,
+            index=False
+        )
+
+    print(
+        f"\n✅ Experimento concluído! "
+        f"Resultados salvos em {OUTPUT_CSV}"
+    )
+
+# ============================================================
+
+if __name__ == "__main__":
+    run_experiment()
