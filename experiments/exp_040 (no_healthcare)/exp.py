@@ -688,13 +688,13 @@ def run_experiment():
 
             moss_path = os.path.join(
                 MOSS_DIR,
-                f"moss_d_lite_{n_classes_real}.pkl"
+                f"moss_d500_lite_{n_classes_real}.pkl"
             )
 
             if not os.path.exists(moss_path):
 
                 print(
-                    f"⚠️ moss_d_lite_{n_classes_real}.pkl não encontrado."
+                    f"⚠️ moss_d500_lite_{n_classes_real}.pkl não encontrado."
                 )
 
                 moss_base_cache[n_classes_real] = {
