@@ -1,12 +1,52 @@
 import os
+import sys
+import functools
+import traceback
+
+# ── Força flush imediato em todo print() do módulo ──
+# Rodando com nohup/background, o stdout fica bufferizado em bloco:
+# se o processo morrer antes do buffer encher, os prints que você
+# "viu rodando" na tela nunca chegam a ser gravados no arquivo de
+# log. É por isso que você só via "nohup: ignoring input" e nada
+# mais, mesmo o script tendo processado várias linhas antes de cair.
+print = functools.partial(print, flush=True)
+
+# ── TMPDIR do joblib ──
+# NÃO usar /tmp (é tmpfs = RAM). Usa o $HOME real do usuário (resolvido
+# dinamicamente, em vez de um caminho chutado) + fallback se não tiver
+# permissão de escrita lá.
+_home_dir = os.path.expanduser("~")
+_joblib_tmp = os.path.join(_home_dir, "tmp_joblib")
+
+try:
+    os.makedirs(_joblib_tmp, exist_ok=True)
+    # testa se realmente consegue escrever ali
+    _test_path = os.path.join(_joblib_tmp, ".write_test")
+    with open(_test_path, "w") as _f:
+        _f.write("ok")
+    os.remove(_test_path)
+
+except (PermissionError, OSError) as _e:
+    import tempfile
+    _joblib_tmp = os.path.join(tempfile.gettempdir(), "julio_joblib_tmp")
+    os.makedirs(_joblib_tmp, exist_ok=True)
+    print(f"⚠️  Não consegui usar {os.path.join(_home_dir, 'tmp_joblib')} ({_e}); "
+          f"usando fallback: {_joblib_tmp}")
+
+os.environ["JOBLIB_TEMP_FOLDER"] = _joblib_tmp
+print(f"📁 JOBLIB_TEMP_FOLDER = {_joblib_tmp}")
+
 import pickle
 import time
+import gc
 import numpy as np
 import pandas as pd
 import warnings
 import quapy as qp
 
 from scipy.stats import skew, kurtosis
+
+from joblib.externals.loky import get_reusable_executor
 
 from sklearn.model_selection import (
     train_test_split,
@@ -79,6 +119,22 @@ N_REPETITIONS = 1
 UPP_REPEATS        = 1
 N_PREV_CALIB       = 1000   # ≥1000 batches na calibração
 N_PREV_TEST        = 1000   # 1000 batches no teste
+
+# ── Paralelismo por modelo. -1 (todos os núcleos) em 13 modelos
+# diferentes, repetidos por 30 reps x 41 datasets, é o que estava
+# esgotando semáforos/memória/tmp e derrubando o processo. Ajuste
+# esse número para caber confortavelmente na sua máquina.
+N_JOBS = 4
+
+# ── Cap de amostras de TREINO para datasets grandes ──────────
+# poker_hand tem ~1M linhas: treinar 13 quantifiers (RF n_estimators=300)
+# + MoSS + calibração nesse volume, com n_jobs=4 replicando os dados por
+# worker, foi o que estourou 125Gi RAM + 8Gi swap e derrubou o processo
+# (confirmado via monitor de memória: subida contínua até OOM-kill).
+# Datasets com treino maior que isso são subamostrados de forma
+# estratificada ANTES de treinar (mantém proporção de classes).
+# O teste (Xte/yte) permanece com o tamanho original.
+MAX_TRAIN_SAMPLES = 50000
 
 np.random.seed(SEED)
 
@@ -275,7 +331,7 @@ def train_rf_calibrator(pred_train, real_train, feat_train):
 
     rf_cal = RandomForestRegressor(
         n_estimators=300,
-        n_jobs=-1,
+        n_jobs=N_JOBS,
         random_state=42,
         min_samples_leaf=2
     )
@@ -451,7 +507,24 @@ def run_experiment():
 
     moss_base_cache = {}
 
-    rows = []
+    # ========================================================
+    # CHECKPOINT: retoma de onde parou, sem refazer datasets
+    # já salvos em OUTPUT_CSV
+    # ========================================================
+
+    if os.path.exists(OUTPUT_CSV):
+
+        df_prev = pd.read_csv(OUTPUT_CSV)
+        rows = df_prev.to_dict("records")
+        datasets_done = set(df_prev["dataset"].unique())
+
+        print(f"\n♻️  Checkpoint encontrado: {len(datasets_done)} dataset(s) já concluído(s), "
+              f"{len(rows)} linhas carregadas de {OUTPUT_CSV}")
+
+    else:
+
+        rows = []
+        datasets_done = set()
 
     all_entries = (
         [(ds, "quapy", None) for ds in QUAPY_MULTICLASS_DATASETS] +
@@ -464,6 +537,10 @@ def run_experiment():
     # ========================================================
 
     for ds_name, source, meta in all_entries:
+
+        if ds_name in datasets_done:
+            print(f"\n⏭️  Pulando {ds_name} (já processado no checkpoint)")
+            continue
 
         print(f"\n📂 Dataset: {ds_name} [{source}]")
 
@@ -537,7 +614,7 @@ def run_experiment():
             quantifiers["EMQ_QUAPY"] = EMQ_QUAPY(
                 RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 calib=None,
@@ -547,7 +624,7 @@ def run_experiment():
             quantifiers["EMQ_BCTS_QUAPY"] = EMQ_QUAPY(
                 RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 calib="bcts",
@@ -559,7 +636,7 @@ def run_experiment():
             quantifiers["EMQ_MLQ"] = EMQ_MLQ(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 calib_function=None,
@@ -569,7 +646,7 @@ def run_experiment():
             quantifiers["EMQ_BCTS_MLQ"] = EMQ_MLQ(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 calib_function="bcts",
@@ -579,7 +656,7 @@ def run_experiment():
             quantifiers["CC"] = CC(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 )
             )
@@ -587,7 +664,7 @@ def run_experiment():
             quantifiers["PCC"] = PCC(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 )
             )
@@ -595,7 +672,7 @@ def run_experiment():
             quantifiers["AC"] = AC(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 )
             )
@@ -603,7 +680,7 @@ def run_experiment():
             quantifiers["PAC"] = PAC(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 )
             )
@@ -611,7 +688,7 @@ def run_experiment():
             quantifiers["FM"] = FM(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 )
             )
@@ -619,7 +696,7 @@ def run_experiment():
             quantifiers["KDEyML"] = KDEyML(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 bandwidth=0.1
@@ -628,7 +705,7 @@ def run_experiment():
             quantifiers["KDEyHD"] = KDEyHD(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 montecarlo_trials=500,
@@ -638,7 +715,7 @@ def run_experiment():
             quantifiers["KDEyCS"] = KDEyCS(
                 learner=RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 bandwidth=0.1
@@ -682,7 +759,7 @@ def run_experiment():
 
                 clf = RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 )
 
@@ -697,14 +774,14 @@ def run_experiment():
             oof_scores = cross_val_predict(
                 RandomForestClassifier(
                     n_estimators=300,
-                    n_jobs=-1,
+                    n_jobs=N_JOBS,
                     random_state=rep_seed
                 ),
                 Xtr,
                 ytr,
                 cv=5,
                 method="predict_proba",
-                n_jobs=-1
+                n_jobs=N_JOBS
             )
 
             # ================================================
@@ -762,7 +839,7 @@ def run_experiment():
 
                     moss_base_model = RandomForestRegressor(
                         n_estimators=300,
-                        n_jobs=-1,
+                        n_jobs=N_JOBS,
                         random_state=SEED,
                         min_samples_leaf=2
                     )
@@ -999,6 +1076,26 @@ def run_experiment():
 
             print(f"💾 Parcial salva em {OUTPUT_CSV}  (rep {rep + 1}/{N_REPETITIONS})")
 
+            # ============================================================
+            # LIMPEZA DE RECURSOS: mata os workers do loky e libera
+            # memória entre repetições, para não acumular semáforos/
+            # pastas temporárias ao longo de 30 reps x 41 datasets.
+            # ============================================================
+
+            get_reusable_executor().shutdown(wait=True, kill_workers=True)
+
+            del quantifiers, trained_quantifiers, oof_scores, clf
+            gc.collect()
+
+        # ============================================================
+        # Fim de todas as repetições deste dataset: libera cache MoSS
+        # do dataset atual se não for mais precisar (opcional — deixe
+        # comentado se quiser manter o cache entre datasets do mesmo
+        # n_classes_real)
+        # ============================================================
+
+        gc.collect()
+
     # ── TEMPO TOTAL ─────────────────────────────────────────
     elapsed = time.time() - experiment_start
     hours, rem = divmod(elapsed, 3600)
@@ -1014,4 +1111,16 @@ def run_experiment():
 
 if __name__ == "__main__":
 
-    run_experiment()
+    try:
+
+        run_experiment()
+
+    except Exception:
+
+        # Garante que QUALQUER exceção não tratada apareça no log,
+        # mesmo rodando em background com nohup (onde o stderr some
+        # se o terminal/sessão SSH já fechou).
+        print("\n\n❌❌❌ EXPERIMENTO ABORTADO POR EXCEÇÃO NÃO TRATADA ❌❌❌")
+        print(traceback.format_exc())
+        sys.stdout.flush()
+        sys.exit(1)
