@@ -4,23 +4,14 @@ import functools
 import traceback
 
 # ── Força flush imediato em todo print() do módulo ──
-# Rodando com nohup/background, o stdout fica bufferizado em bloco:
-# se o processo morrer antes do buffer encher, os prints que você
-# "viu rodando" na tela nunca chegam a ser gravados no arquivo de
-# log. É por isso que você só via "nohup: ignoring input" e nada
-# mais, mesmo o script tendo processado várias linhas antes de cair.
 print = functools.partial(print, flush=True)
 
 # ── TMPDIR do joblib ──
-# NÃO usar /tmp (é tmpfs = RAM). Usa o $HOME real do usuário (resolvido
-# dinamicamente, em vez de um caminho chutado) + fallback se não tiver
-# permissão de escrita lá.
 _home_dir = os.path.expanduser("~")
 _joblib_tmp = os.path.join(_home_dir, "tmp_joblib")
 
 try:
     os.makedirs(_joblib_tmp, exist_ok=True)
-    # testa se realmente consegue escrever ali
     _test_path = os.path.join(_joblib_tmp, ".write_test")
     with open(_test_path, "w") as _f:
         _f.write("ok")
@@ -106,41 +97,33 @@ MOSS_DIR = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/moss/multicla
 
 DATASETS_ROOT = "/var/new_homes/julio/mestrado/mestrado-dyssyn/datasets/multiclass"
 
-# Datasets locais (10-50 classes), filtrados da lista CSV
 LOCAL_DATASETS_DIR = "/var/new_homes/julio/mestrado/mestrado-dyssyn/experiments/datasets_multiclass"
 
 OUTPUT_CSV = "results.csv"
+
+# ── DIAGNÓSTICO: desliga MoSS_BASE, ISO, RF_CALIBRATED e HYBRID
+# inteiros (treino + predição), incluindo o custo de OOF/clf que
+# só existe para alimentar o MoSS. Com False, o CSV vai ter só os
+# quantifiers clássicos — compare o tempo por repetição/dataset
+# contra uma rodada anterior com True para isolar o gargalo.
+# Lembre de voltar para True depois do teste, ou vai faltar MoSS
+# nos seus resultados finais.
+RUN_MOSS_MODELS = False
 
 # ── Número de repetições do loop treino/teste ──────────────
 N_REPETITIONS = 30
 
 # ── UPP: repeats=1; n_prevalences calculado para ≥1000 batches
-# batches = repeats * n_prevalences  →  1 * 1000 = 1000
 UPP_REPEATS        = 1
-N_PREV_CALIB       = 1000   # ≥1000 batches na calibração
-N_PREV_TEST        = 1000   # 1000 batches no teste
+N_PREV_CALIB       = 1000
+N_PREV_TEST        = 1000
 
-# ── Paralelismo por modelo. -1 (todos os núcleos) em 13 modelos
-# diferentes, repetidos por 30 reps x 41 datasets, é o que estava
-# esgotando semáforos/memória/tmp e derrubando o processo. Ajuste
-# esse número para caber confortavelmente na sua máquina.
+# ── Paralelismo por modelo. ──
 N_JOBS = 4
 
 # ── Cap de amostras de TREINO para datasets grandes ──────────
-# poker_hand tem ~1M linhas: treinar 13 quantifiers (RF n_estimators=300)
-# + MoSS + calibração nesse volume, com n_jobs=4 replicando os dados por
-# worker, foi o que estourou 125Gi RAM + 8Gi swap e derrubou o processo
-# (confirmado via monitor de memória: subida contínua até OOM-kill).
-# Datasets com treino maior que isso são subamostrados de forma
-# estratificada ANTES de treinar (mantém proporção de classes).
-# O teste (Xte/yte) permanece com o tamanho original.
 MAX_TRAIN_SAMPLES = 50000
 
-# ── Peso das amostras REAIS em relação às sintéticas no
-# treinamento do MoSS_HYBRID. Um peso maior faz o modelo confiar
-# mais nos dados reais de calibração (poucos, porém no domínio
-# certo) do que nas curvas sintéticas do MoSS (muitas, mas fora
-# do domínio real).
 HYBRID_REAL_WEIGHT = 5
 
 np.random.seed(SEED)
@@ -241,13 +224,6 @@ def build_calibration_table(
     n_classes_real,
     protocol_calib
 ):
-    """
-    Retorna:
-        pred_all : (N, n_classes)   — predições do MoSS base nos batches reais
-        real_all : (N, n_classes)   — prevalências reais dos batches
-        feat_all : (N, 4*n_classes) — f_vecs originais (para RF calibrador / hybrid)
-    """
-
     pred_all = []
     real_all = []
     feat_all = []
@@ -290,11 +266,6 @@ def build_calibration_table(
 # ============================================================
 
 def train_isotonic_calibrator(pred_train, real_train, n_classes):
-    """
-    Treina um IsotonicRegressor por classe.
-    X = predição do MoSS base nos dados reais
-    y = prevalência real
-    """
 
     calibrators = []
 
@@ -329,10 +300,6 @@ def apply_isotonic_calibrator(calibrators, p_pred_raw, n_classes):
 # ============================================================
 
 def train_rf_calibrator(pred_train, real_train, feat_train):
-    """
-    RF calibrador com features enriquecidas:
-    Input = [pred_moss | f_vec_original]
-    """
 
     X_input = np.hstack([pred_train, feat_train])
 
@@ -362,11 +329,6 @@ def apply_rf_calibrator(rf_cal, p_pred_raw, f_vec, n_classes):
 
 # ============================================================
 # HYBRID CALIBRATOR
-# Treina um RF direto em f_vec -> prevalência real, usando as
-# curvas sintéticas do MoSS (X_m, y_m) + os batches reais de
-# calibração (feat_calib, real_calib), dando peso maior às
-# amostras reais. Diferente do RF_CALIBRATED: aqui a entrada é
-# só o f_vec (não recebe a predição do MoSS base como feature).
 # ============================================================
 
 def train_hybrid_calibrator(X_m, y_m, feat_calib, real_calib, rep_seed):
@@ -404,14 +366,10 @@ def apply_hybrid_calibrator(hybrid, f_vec, n_classes):
 
 
 # ============================================================
-# LOAD FULL DATASET (retorna X_all, y_all ou None em erro)
+# LOAD FULL DATASET
 # ============================================================
 
 def load_full_dataset(ds_name, source, meta):
-    """
-    Carrega o dataset completo (sem split) para qualquer fonte.
-    Retorna (X_all, y_all) ou (None, None) em caso de erro.
-    """
 
     try:
 
@@ -425,7 +383,6 @@ def load_full_dataset(ds_name, source, meta):
                 verbose=False
             )
 
-            # Concatenar treino + teste para obter o dataset completo
             train, test = dataset.train_test
 
             X_all = np.vstack([train.instances, test.instances])
@@ -453,14 +410,12 @@ def load_full_dataset(ds_name, source, meta):
             X_all  = df_X.values
             y_all, _ = pd.factorize(y_raw)
 
-            # Filtrar classes com menos de 2 amostras
             classes, counts = np.unique(y_all, return_counts=True)
             valid_classes   = classes[counts >= 2]
             mask            = np.isin(y_all, valid_classes)
             X_all           = X_all[mask]
             y_all           = y_all[mask]
 
-            # Re-mapear para 0..n-1 contíguo
             y_all, _ = pd.factorize(y_all)
 
             n_cls = len(np.unique(y_all))
@@ -478,25 +433,10 @@ def load_full_dataset(ds_name, source, meta):
 
 
 # ============================================================
-# GET DATASET SIZE (só pra ordenar, sem manter em memória)
+# GET DATASET SIZE
 # ============================================================
 
 def get_dataset_size(ds_name, source, meta):
-    """
-    Mede o número de amostras do dataset SEM manter os dados carregados
-    em memória depois — usado só para decidir a ordem de processamento
-    (menor → maior).
-
-    - quapy: usa o número real de amostras (treino+teste). Isso baixa/lê
-      o dataset, mas o quapy mantém cache local em disco, então a
-      segunda leitura (a real, dentro do loop principal) é rápida.
-    - local: conta as linhas do CSV direto do disco (streaming, sem
-      parsear a matriz numérica inteira) — rápido mesmo pra arquivos
-      grandes.
-
-    Retorna None se não conseguir medir (nesse caso o dataset vai pro
-    fim da fila, tratado como "tamanho desconhecido").
-    """
 
     try:
 
@@ -524,7 +464,7 @@ def get_dataset_size(ds_name, source, meta):
                 return None
 
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                n = sum(1 for _ in f) - 1  # -1 para descontar o cabeçalho
+                n = sum(1 for _ in f) - 1
 
             return max(n, 0)
 
@@ -540,11 +480,7 @@ def get_dataset_size(ds_name, source, meta):
 
 def run_experiment():
 
-    experiment_start = time.time()  # ← INÍCIO DA CONTAGEM
-
-    # --------------------------------------------------------
-    # QUAPY datasets
-    # --------------------------------------------------------
+    experiment_start = time.time()
 
     QUAPY_MULTICLASS_DATASETS = [
         'dry-bean',
@@ -572,10 +508,6 @@ def run_experiment():
         'image_seg',
         'hcv',
     ]
-
-    # --------------------------------------------------------
-    # Datasets locais com 10-50 classes
-    # --------------------------------------------------------
 
     LOCAL_DATASETS = [
         ("!dataset_372_internet_usage.csv",                 "class"),
@@ -611,12 +543,12 @@ def run_experiment():
     print(f"Repetições treino/teste: {N_REPETITIONS}")
     print(f"Batches calibração: {UPP_REPEATS * N_PREV_CALIB}")
     print(f"Batches teste:      {UPP_REPEATS * N_PREV_TEST}")
+    print(f"🔬 RUN_MOSS_MODELS = {RUN_MOSS_MODELS} (diagnóstico de lentidão)")
 
     moss_base_cache = {}
 
     # ========================================================
-    # CHECKPOINT: retoma de onde parou, sem refazer datasets/
-    # repetições já salvos em OUTPUT_CSV
+    # CHECKPOINT
     # ========================================================
 
     if os.path.exists(OUTPUT_CSV):
@@ -634,9 +566,6 @@ def run_experiment():
         print(f"\n♻️  Checkpoint encontrado: {len(datasets_done)} dataset(s) completo(s) "
             f"({N_REPETITIONS} reps), {len(df_prev)} linhas já salvas em {OUTPUT_CSV}")
 
-        # Já extraímos tudo que precisávamos (datasets_done / reps_completed);
-        # não guardamos df_prev nem reconstruímos "rows" em memória — as
-        # próximas linhas serão só ADICIONADAS ao CSV, nunca reescritas.
         header_written = True
         del df_prev
 
@@ -648,10 +577,6 @@ def run_experiment():
 
     # ========================================================
     # ORDENAR DATASETS POR TAMANHO (menor → maior)
-    # O objetivo é rodar tudo que é rápido/leve primeiro, deixando
-    # os pesados (ex.: poker_hand, ~1M amostras) por último — assim,
-    # se o processo cair no dataset grande, todo o resto já está
-    # salvo e não precisa ser refeito.
     # ========================================================
 
     all_entries_unsorted = (
@@ -666,10 +591,8 @@ def run_experiment():
 
     for ds_name, source, meta in all_entries_unsorted:
 
-        # Datasets já completos no checkpoint não precisam ser medidos —
-        # economiza o fetch/leitura de quem já vai ser pulado mesmo.
         if ds_name in datasets_done:
-            sized_entries.append((-1, ds_name, source, meta))  # -1 = vai primeiro, mas será pulado
+            sized_entries.append((-1, ds_name, source, meta))
             continue
 
         n = get_dataset_size(ds_name, source, meta)
@@ -697,7 +620,7 @@ def run_experiment():
         print(f"   {ds_name} [{source}] — {tamanho_str}")
 
     # ========================================================
-    # LOOP PRINCIPAL: dataset (do menor pro maior) → repetição
+    # LOOP PRINCIPAL
     # ========================================================
 
     for ds_name, source, meta in all_entries:
@@ -708,10 +631,6 @@ def run_experiment():
 
         print(f"\n📂 Dataset: {ds_name} [{source}]")
 
-        # ----------------------------------------------------
-        # Carregar dataset completo UMA vez por dataset
-        # ----------------------------------------------------
-
         X_all, y_all = load_full_dataset(ds_name, source, meta)
 
         if X_all is None:
@@ -720,24 +639,15 @@ def run_experiment():
         n_classes_global = len(np.unique(y_all))
         print(f"   🔢 Classes (total): {n_classes_global}  |  Amostras: {len(y_all)}")
 
-        # ====================================================
-        # LOOP DE REPETIÇÕES (30x split treino/teste)
-        # ====================================================
-
         for rep in range(N_REPETITIONS):
 
             rep_seed = SEED + rep
 
-            # pula essa repetição específica se já estiver no checkpoint
             if (ds_name, rep + 1) in reps_completed:
                 print(f"      ⏭️  Rep {rep + 1} de {ds_name} já no checkpoint, pulando")
                 continue
 
             print(f"\n   🔁 Repetição {rep + 1}/{N_REPETITIONS}  (seed={rep_seed})")
-
-            # ------------------------------------------------
-            # Split 70/30 estratificado com seed variável
-            # ------------------------------------------------
 
             try:
 
@@ -753,20 +663,11 @@ def run_experiment():
                 print(f"❌ Erro no split (rep {rep + 1}): {e}")
                 continue
 
-            # ------------------------------------------------
-            # Verificar n_classes após split
-            # ------------------------------------------------
-
             n_classes_real = len(np.unique(ytr))
 
-            # Garantir que teste tem as mesmas classes que treino
             yte = np.array([y if y < n_classes_real else 0 for y in yte])
 
             print(f"      🔢 Classes no treino: {n_classes_real}")
-
-            # ------------------------------------------------
-            # Scaling
-            # ------------------------------------------------
 
             scaler = StandardScaler()
             Xtr    = scaler.fit_transform(Xtr)
@@ -917,192 +818,204 @@ def run_experiment():
                     print(f"❌ Erro em {q_name}: {e}")
 
             # ================================================
-            # CLASSIFIER FOR MoSS
+            # BLOCO INTEIRO DO MoSS (BASE/ISO/RF/HYBRID) —
+            # só roda se RUN_MOSS_MODELS=True
             # ================================================
 
-            if "EMQ_BCTS_QUAPY" in trained_quantifiers:
-
-                clf = trained_quantifiers["EMQ_BCTS_QUAPY"].classifier
-
-            else:
-
-                clf = RandomForestClassifier(
-                    n_estimators=300,
-                    n_jobs=N_JOBS,
-                    random_state=rep_seed
-                )
-
-                clf.fit(Xtr, ytr)
-
-            # ================================================
-            # OOF PROBABILITIES
-            # ================================================
-
-            print("      🔄 Generating OOF probabilities...")
-
-            oof_scores = cross_val_predict(
-                RandomForestClassifier(
-                    n_estimators=300,
-                    n_jobs=N_JOBS,
-                    random_state=rep_seed
-                ),
-                Xtr,
-                ytr,
-                cv=5,
-                method="predict_proba",
-                n_jobs=N_JOBS
-            )
-
-            # ================================================
-            # LOAD / TRAIN MoSS BASE — cache por n_classes
-            # ================================================
-
-            if n_classes_real not in moss_base_cache:
-
-                moss_path = os.path.join(
-                    MOSS_DIR,
-                    f"moss_d500_lite_{n_classes_real}.pkl"
-                )
-
-                if not os.path.exists(moss_path):
-
-                    print(
-                        f"⚠️ moss_d500_lite_{n_classes_real}.pkl não encontrado."
-                    )
-
-                    moss_base_cache[n_classes_real] = {
-                        "model": None,
-                        "X_m": None,
-                        "y_m": None
-                    }
-
-                else:
-
-                    print(
-                        f"🧠 Carregando MoSS base sintético para {n_classes_real} classes..."
-                    )
-
-                    with open(moss_path, "rb") as f:
-
-                        synthetic_distributions = pickle.load(f)
-
-                    X_m = []
-                    y_m = []
-
-                    for (alpha_prev, _), curves in synthetic_distributions.items():
-
-                        for scores_matrix in curves:
-
-                            feat = baseline_features(
-                                scores_matrix,
-                                n_classes_real
-                            )
-
-                            X_m.append(feat)
-                            y_m.append(list(alpha_prev))
-
-                    X_m = np.array(X_m)
-                    y_m = np.array(y_m)
-
-                    print(f"      🧪 Synthetic samples: {len(X_m)}")
-
-                    moss_base_model = RandomForestRegressor(
-                        n_estimators=300,
-                        n_jobs=N_JOBS,
-                        random_state=SEED,
-                        min_samples_leaf=2
-                    )
-
-                    moss_base_model.fit(X_m, y_m)
-
-                    print(f"✅ MoSS_BASE_{n_classes_real} treinado!")
-
-                    moss_base_cache[n_classes_real] = {
-                        "model": moss_base_model,
-                        "X_m": X_m,
-                        "y_m": y_m
-                    }
-
-            moss_entry      = moss_base_cache[n_classes_real]
-            moss_base_model = moss_entry["model"]
-            X_m             = moss_entry["X_m"]
-            y_m             = moss_entry["y_m"]
-
-            # ================================================
-            # CALIBRAÇÃO POR REPETIÇÃO
-            # ================================================
-
+            clf               = None
+            oof_scores        = None
+            moss_base_model   = None
+            X_m               = None
+            y_m               = None
             iso_calibrators   = None
             rf_calibrator     = None
             hybrid_calibrator = None
 
-            if moss_base_model is not None:
+            if RUN_MOSS_MODELS:
 
-                print("      📐 Gerando tabela de calibração...")
+                # ------------------------------------------------
+                # CLASSIFIER FOR MoSS
+                # ------------------------------------------------
 
-                # batches = UPP_REPEATS * N_PREV_CALIB = 1 * 1000 = 1000
-                protocol_calib = UPP(
-                    batch_size=500,
-                    n_prevalences=N_PREV_CALIB,
-                    repeats=UPP_REPEATS,
-                    random_state=rep_seed
-                )
+                if "EMQ_BCTS_QUAPY" in trained_quantifiers:
 
-                pred_calib, real_calib, feat_calib = build_calibration_table(
-                    moss_base_model=moss_base_model,
-                    Xtr=Xtr,
-                    ytr=ytr,
-                    oof_scores=oof_scores,
-                    n_classes_real=n_classes_real,
-                    protocol_calib=protocol_calib
-                )
+                    clf = trained_quantifiers["EMQ_BCTS_QUAPY"].classifier
 
-                print(
-                    f"      📊 Calibration table: {pred_calib.shape[0]} amostras reais"
-                )
-
-                print("      🔧 Treinando MoSS_ISO_CALIBRATED...")
-
-                iso_calibrators = train_isotonic_calibrator(
-                    pred_calib,
-                    real_calib,
-                    n_classes_real
-                )
-
-                print(f"✅ MoSS_ISO_CALIBRATED_{n_classes_real} treinado!")
-
-                print("      🌲 Treinando MoSS_RF_CALIBRATED...")
-
-                rf_calibrator = train_rf_calibrator(
-                    pred_calib,
-                    real_calib,
-                    feat_calib
-                )
-
-                print(f"✅ MoSS_RF_CALIBRATED_{n_classes_real} treinado!")
-
-                print("      🌿 Treinando MoSS_HYBRID...")
-
-                hybrid_calibrator = train_hybrid_calibrator(
-                    X_m,
-                    y_m,
-                    feat_calib,
-                    real_calib,
-                    rep_seed
-                )
-
-                if hybrid_calibrator is not None:
-                    print(f"✅ MoSS_HYBRID_{n_classes_real} treinado!")
                 else:
-                    print(f"⚠️ MoSS_HYBRID_{n_classes_real} não treinado (sem X_m).")
+
+                    clf = RandomForestClassifier(
+                        n_estimators=300,
+                        n_jobs=N_JOBS,
+                        random_state=rep_seed
+                    )
+
+                    clf.fit(Xtr, ytr)
+
+                # ------------------------------------------------
+                # OOF PROBABILITIES
+                # ------------------------------------------------
+
+                print("      🔄 Generating OOF probabilities...")
+
+                oof_scores = cross_val_predict(
+                    RandomForestClassifier(
+                        n_estimators=300,
+                        n_jobs=N_JOBS,
+                        random_state=rep_seed
+                    ),
+                    Xtr,
+                    ytr,
+                    cv=5,
+                    method="predict_proba",
+                    n_jobs=N_JOBS
+                )
+
+                # ------------------------------------------------
+                # LOAD / TRAIN MoSS BASE — cache por n_classes
+                # ------------------------------------------------
+
+                if n_classes_real not in moss_base_cache:
+
+                    moss_path = os.path.join(
+                        MOSS_DIR,
+                        f"moss_d500_lite_{n_classes_real}.pkl"
+                    )
+
+                    if not os.path.exists(moss_path):
+
+                        print(
+                            f"⚠️ moss_d500_lite_{n_classes_real}.pkl não encontrado."
+                        )
+
+                        moss_base_cache[n_classes_real] = {
+                            "model": None,
+                            "X_m": None,
+                            "y_m": None
+                        }
+
+                    else:
+
+                        print(
+                            f"🧠 Carregando MoSS base sintético para {n_classes_real} classes..."
+                        )
+
+                        with open(moss_path, "rb") as f:
+
+                            synthetic_distributions = pickle.load(f)
+
+                        X_m_local = []
+                        y_m_local = []
+
+                        for (alpha_prev, _), curves in synthetic_distributions.items():
+
+                            for scores_matrix in curves:
+
+                                feat = baseline_features(
+                                    scores_matrix,
+                                    n_classes_real
+                                )
+
+                                X_m_local.append(feat)
+                                y_m_local.append(list(alpha_prev))
+
+                        X_m_local = np.array(X_m_local)
+                        y_m_local = np.array(y_m_local)
+
+                        print(f"      🧪 Synthetic samples: {len(X_m_local)}")
+
+                        moss_base_model_local = RandomForestRegressor(
+                            n_estimators=300,
+                            n_jobs=N_JOBS,
+                            random_state=SEED,
+                            min_samples_leaf=2
+                        )
+
+                        moss_base_model_local.fit(X_m_local, y_m_local)
+
+                        print(f"✅ MoSS_BASE_{n_classes_real} treinado!")
+
+                        moss_base_cache[n_classes_real] = {
+                            "model": moss_base_model_local,
+                            "X_m": X_m_local,
+                            "y_m": y_m_local
+                        }
+
+                moss_entry      = moss_base_cache[n_classes_real]
+                moss_base_model = moss_entry["model"]
+                X_m             = moss_entry["X_m"]
+                y_m             = moss_entry["y_m"]
+
+                # ------------------------------------------------
+                # CALIBRAÇÃO POR REPETIÇÃO
+                # ------------------------------------------------
+
+                if moss_base_model is not None:
+
+                    print("      📐 Gerando tabela de calibração...")
+
+                    protocol_calib = UPP(
+                        batch_size=500,
+                        n_prevalences=N_PREV_CALIB,
+                        repeats=UPP_REPEATS,
+                        random_state=rep_seed
+                    )
+
+                    pred_calib, real_calib, feat_calib = build_calibration_table(
+                        moss_base_model=moss_base_model,
+                        Xtr=Xtr,
+                        ytr=ytr,
+                        oof_scores=oof_scores,
+                        n_classes_real=n_classes_real,
+                        protocol_calib=protocol_calib
+                    )
+
+                    print(
+                        f"      📊 Calibration table: {pred_calib.shape[0]} amostras reais"
+                    )
+
+                    print("      🔧 Treinando MoSS_ISO_CALIBRATED...")
+
+                    iso_calibrators = train_isotonic_calibrator(
+                        pred_calib,
+                        real_calib,
+                        n_classes_real
+                    )
+
+                    print(f"✅ MoSS_ISO_CALIBRATED_{n_classes_real} treinado!")
+
+                    print("      🌲 Treinando MoSS_RF_CALIBRATED...")
+
+                    rf_calibrator = train_rf_calibrator(
+                        pred_calib,
+                        real_calib,
+                        feat_calib
+                    )
+
+                    print(f"✅ MoSS_RF_CALIBRATED_{n_classes_real} treinado!")
+
+                    print("      🌿 Treinando MoSS_HYBRID...")
+
+                    hybrid_calibrator = train_hybrid_calibrator(
+                        X_m,
+                        y_m,
+                        feat_calib,
+                        real_calib,
+                        rep_seed
+                    )
+
+                    if hybrid_calibrator is not None:
+                        print(f"✅ MoSS_HYBRID_{n_classes_real} treinado!")
+                    else:
+                        print(f"⚠️ MoSS_HYBRID_{n_classes_real} não treinado (sem X_m).")
+
+            else:
+
+                print("      ⏭️  RUN_MOSS_MODELS=False — pulando classificador extra, OOF e todo o bloco MoSS")
 
             # ================================================
             # PROTOCOLO DE TESTE
-            # batches = UPP_REPEATS * N_PREV_TEST = 1 * 1000 = 1000
             # ================================================
 
-            # Linhas geradas só nesta repetição — não acumula o
-            # histórico inteiro em memória.
             rep_rows = []
 
             protocol_test = UPP(
@@ -1120,10 +1033,6 @@ def run_experiment():
                 desc=f"UPP rep={rep + 1}"
             ):
 
-                # ============================================
-                # REAL PREVALENCE
-                # ============================================
-
                 p_real = get_prev_from_labels(
                     yte[idx_batch],
                     classes=np.arange(n_classes_real)
@@ -1133,10 +1042,6 @@ def run_experiment():
                     p_real,
                     n_classes_real
                 )
-
-                # ============================================
-                # QUANTIFIERS CLÁSSICOS
-                # ============================================
 
                 for q_name, q in trained_quantifiers.items():
 
@@ -1164,10 +1069,10 @@ def run_experiment():
                         print(f"❌ Erro em {q_name}: {e}")
 
                 # ============================================
-                # MoSS (4 versões)
+                # MoSS (4 versões) — só se RUN_MOSS_MODELS=True
                 # ============================================
 
-                if moss_base_model is not None:
+                if RUN_MOSS_MODELS and moss_base_model is not None:
 
                     try:
 
@@ -1181,10 +1086,6 @@ def run_experiment():
                         )
 
                         f_vec_2d = f_vec.reshape(1, -1)
-
-                        # ------------------------------------
-                        # 1) MoSS BASE (só sintético)
-                        # ------------------------------------
 
                         p_moss_raw = moss_base_model.predict(
                             f_vec_2d
@@ -1205,10 +1106,6 @@ def run_experiment():
                             )
                         })
 
-                        # ------------------------------------
-                        # 2) MoSS ISO CALIBRATED
-                        # ------------------------------------
-
                         if iso_calibrators is not None:
 
                             p_moss_iso = apply_isotonic_calibrator(
@@ -1226,10 +1123,6 @@ def run_experiment():
                                     np.abs(p_moss_iso - p_real)
                                 )
                             })
-
-                        # ------------------------------------
-                        # 3) MoSS RF CALIBRATED
-                        # ------------------------------------
 
                         if rf_calibrator is not None:
 
@@ -1249,10 +1142,6 @@ def run_experiment():
                                     np.abs(p_moss_rf - p_real)
                                 )
                             })
-
-                        # ------------------------------------
-                        # 4) MoSS HYBRID
-                        # ------------------------------------
 
                         if hybrid_calibrator is not None:
 
@@ -1277,8 +1166,7 @@ def run_experiment():
                         print(f"❌ Erro no MoSS: {e}")
 
             # ================================================
-            # SAVE PARTIAL (a cada repetição) — append incremental,
-            # nunca reescreve o histórico inteiro do zero.
+            # SAVE PARTIAL
             # ================================================
 
             pd.DataFrame(rep_rows).to_csv(
@@ -1293,28 +1181,14 @@ def run_experiment():
 
             print(f"💾 Parcial salva em {OUTPUT_CSV}  (rep {rep + 1}/{N_REPETITIONS})")
 
-            # ============================================================
-            # LIMPEZA DE RECURSOS: mata os workers do loky e libera
-            # memória entre repetições, para não acumular semáforos/
-            # pastas temporárias ao longo de 30 reps x 41 datasets.
-            # ============================================================
-
             get_reusable_executor().shutdown(wait=True, kill_workers=True)
 
             del quantifiers, trained_quantifiers, oof_scores, clf
             del iso_calibrators, rf_calibrator, hybrid_calibrator
             gc.collect()
 
-        # ============================================================
-        # Fim de todas as repetições deste dataset: libera cache MoSS
-        # do dataset atual se não for mais precisar (opcional — deixe
-        # comentado se quiser manter o cache entre datasets do mesmo
-        # n_classes_real)
-        # ============================================================
-
         gc.collect()
 
-    # ── TEMPO TOTAL ─────────────────────────────────────────
     elapsed = time.time() - experiment_start
     hours, rem = divmod(elapsed, 3600)
     minutes, seconds = divmod(rem, 60)
@@ -1335,9 +1209,6 @@ if __name__ == "__main__":
 
     except Exception:
 
-        # Garante que QUALQUER exceção não tratada apareça no log,
-        # mesmo rodando em background com nohup (onde o stderr some
-        # se o terminal/sessão SSH já fechou).
         print("\n\n❌❌❌ EXPERIMENTO ABORTADO POR EXCEÇÃO NÃO TRATADA ❌❌❌")
         print(traceback.format_exc())
         sys.stdout.flush()
